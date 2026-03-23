@@ -411,6 +411,7 @@ async fn create_session(
     let CreateSessionRequest {
         agent_id,
         provider_profile_id,
+        title,
     } = payload.into_inner();
 
     match state.repository.get_agent(agent_id).await {
@@ -427,7 +428,7 @@ async fn create_session(
 
     match state
         .repository
-        .create_session(agent_id, resolved_provider_profile_id)
+        .create_session(agent_id, resolved_provider_profile_id, title)
         .await
     {
         Ok(session) => HttpResponse::Created().json(session),
@@ -446,9 +447,16 @@ async fn list_sessions(
     state: web::Data<AppState>,
     query: web::Query<ListSessionsQuery>,
 ) -> HttpResponse {
-    let ListSessionsQuery { agent_id } = query.into_inner();
+    let ListSessionsQuery {
+        agent_id,
+        include_messages,
+    } = query.into_inner();
 
-    match state.repository.list_sessions(agent_id).await {
+    match state
+        .repository
+        .list_sessions(agent_id, include_messages.unwrap_or(false))
+        .await
+    {
         Ok(sessions) => HttpResponse::Ok().json(sessions),
         Err(error) => repository_error_response(error),
     }
