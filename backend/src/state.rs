@@ -1,7 +1,8 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
-use ailoy::{AgentProvider, AgentRuntime, LangModelAPISchema, LangModelProvider, ToolSet};
+use ailoy::{AgentProvider, LangModelAPISchema, LangModelProvider};
+use chat_agent::ChatAgent;
 use tokio::sync::Mutex as TokioMutex;
 use url::Url;
 use uuid::Uuid;
@@ -15,7 +16,7 @@ use crate::repository::{
 struct CachedRuntime {
     agent_id: Uuid,
     provider_profile_id: Uuid,
-    runtime: Arc<TokioMutex<AgentRuntime>>,
+    runtime: Arc<TokioMutex<ChatAgent>>,
 }
 
 pub struct AppState {
@@ -67,7 +68,7 @@ impl AppState {
     pub async fn get_or_create_runtime_for_session(
         &self,
         session: &Session,
-    ) -> RepositoryResult<Arc<TokioMutex<AgentRuntime>>> {
+    ) -> RepositoryResult<Arc<TokioMutex<ChatAgent>>> {
         if let Ok(mut cache) = self.runtime_cache.lock()
             && let Some(cached) = cache.get(&session.id).cloned()
         {
@@ -95,10 +96,9 @@ impl AppState {
                 RepositoryError::InvalidData("provider profile not found for session".to_string())
             })?;
 
-        let runtime = Arc::new(TokioMutex::new(AgentRuntime::new(
+        let runtime = Arc::new(TokioMutex::new(ChatAgent::new(
             agent.spec,
             provider_profile.provider,
-            ToolSet::new(),
         )));
 
         let cached = CachedRuntime {

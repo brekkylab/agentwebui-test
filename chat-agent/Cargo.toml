@@ -1,0 +1,10 @@
+[package]
+name = "chat-agent"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+ailoy = { git = "https://github.com/brekkylab/ailoy.git", rev = "f4bc37889e030207a284fed67406a5529d94375a" }
+anyhow = "1.0.100"
+thiserror = "2.0.17"
+url = { version = "2.5.7", features = ["serde"] }
