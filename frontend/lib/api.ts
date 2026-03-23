@@ -138,6 +138,18 @@ export async function deleteSession(id: string): Promise<void> {
   return fetchApi<void>(`/sessions/${id}`, { method: "DELETE" });
 }
 
+// --- Session Title ---
+
+export async function updateSessionTitle(
+  id: string,
+  title: string,
+): Promise<ApiSession> {
+  return fetchApi<ApiSession>(`/sessions/${id}`, {
+    method: "PUT",
+    body: JSON.stringify({ title }),
+  });
+}
+
 // --- Messages ---
 
 export async function sendMessage(

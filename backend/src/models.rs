@@ -115,6 +115,12 @@ pub struct ListSessionsQuery {
 
 #[derive(Debug, Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
+pub struct UpdateSessionRequest {
+    pub title: String,
+}
+
+#[derive(Debug, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
 pub struct AddSessionMessageRequest {
     pub role: MessageRole,
     pub content: String,

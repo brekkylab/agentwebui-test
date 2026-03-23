@@ -5,6 +5,7 @@ import { ApiRuntimeProvider } from "@/components/chat/api-runtime-provider";
 import { ChatView } from "@/components/chat/chat-view";
 import { KnowledgePanel } from "@/components/chat/knowledge-panel";
 import { NewChatSetup } from "@/components/chat/new-chat-setup";
+import { SessionTitle } from "@/components/chat/session-title";
 import { useAppStore } from "@/lib/store";
 
 export default function ChatPage() {
@@ -27,11 +28,14 @@ export default function ChatPage() {
         {isKnowledgePanelOpen && (
           <KnowledgePanel onClose={() => setIsKnowledgePanelOpen(false)} />
         )}
-        <div className="flex-1">
-          <ChatView
-            onToggleKnowledgePanel={() => setIsKnowledgePanelOpen((v) => !v)}
-            isKnowledgePanelOpen={isKnowledgePanelOpen}
-          />
+        <div className="flex-1 flex flex-col">
+          <SessionTitle sessionId={activeSessionId} />
+          <div className="flex-1">
+            <ChatView
+              onToggleKnowledgePanel={() => setIsKnowledgePanelOpen((v) => !v)}
+              isKnowledgePanelOpen={isKnowledgePanelOpen}
+            />
+          </div>
         </div>
       </div>
     </ApiRuntimeProvider>

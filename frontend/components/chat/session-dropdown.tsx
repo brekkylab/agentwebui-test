@@ -19,6 +19,7 @@ export function SessionDropdown() {
   const setActiveSession = useAppStore((s) => s.setActiveSession);
   const removeSessionLocalData = useAppStore((s) => s.removeSessionLocalData);
   const activeSessionId = useAppStore((s) => s.activeSessionId);
+  const sessionListVersion = useAppStore((s) => s.sessionListVersion);
   const router = useRouter();
 
   const [sessions, setSessions] = useState<ApiSession[]>([]);
@@ -35,7 +36,7 @@ export function SessionDropdown() {
   // 드롭다운이 열릴 때마다 갱신 (open state로 관리하지 않고 mount + activeSessionId 변경 시)
   useEffect(() => {
     fetchSessions();
-  }, [fetchSessions, activeSessionId]);
+  }, [fetchSessions, activeSessionId, sessionListVersion]);
 
   const handleNewChat = () => {
     setActiveSession(null);

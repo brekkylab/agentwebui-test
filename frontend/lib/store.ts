@@ -38,6 +38,8 @@ interface AppState {
   // Active session (UI state)
   activeSessionId: string | null;
   setActiveSession: (id: string | null) => void;
+  sessionListVersion: number;
+  bumpSessionListVersion: () => void;
 
   // Per-session local data (Knowledge/Document associations — not in Backend)
   sessionLocalData: Record<string, SessionLocalData>;
@@ -98,6 +100,8 @@ export const useAppStore = create<AppState>((set, get) => ({
   // Active session
   activeSessionId: null,
   setActiveSession: (id) => set({ activeSessionId: id }),
+  sessionListVersion: 0,
+  bumpSessionListVersion: () => set((s) => ({ sessionListVersion: s.sessionListVersion + 1 })),
 
   // Per-session local data
   sessionLocalData: {},
