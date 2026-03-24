@@ -9,11 +9,12 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { PROVIDER_MODELS, type ProviderName } from "@/lib/constants";
 import {
   getProviderProfiles,
+  getKnowledges,
   createAgent,
   createSession,
   ApiError,
 } from "@/lib/api";
-import type { ApiProviderProfile } from "@/lib/types";
+import type { ApiProviderProfile, ApiKnowledge } from "@/lib/types";
 import { useAppStore } from "@/lib/store";
 
 const PROVIDER_NAMES = Object.keys(PROVIDER_MODELS) as ProviderName[];
@@ -35,7 +36,7 @@ export function NewChatSetup({
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const knowledges = useAppStore((s) => s.knowledges);
+  const [knowledges, setKnowledges] = useState<ApiKnowledge[]>([]);
 
   const fetchProfiles = () => {
     setLoadState("loading");
@@ -60,6 +61,9 @@ export function NewChatSetup({
 
   useEffect(() => {
     fetchProfiles();
+    getKnowledges()
+      .then(setKnowledges)
+      .catch(() => {});
   }, []);
 
   const handleProviderChange = (provider: ProviderName) => {

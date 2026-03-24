@@ -1,5 +1,6 @@
 "use client";
 
+import { useState, useEffect, useCallback } from "react";
 import { ArrowLeft, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -15,7 +16,13 @@ import {
   DialogTitle,
   DialogTrigger,
 } from "@/components/ui/dialog";
-import { useAppStore } from "@/lib/store";
+import {
+  getKnowledges,
+  getSources,
+  updateKnowledge,
+  deleteKnowledge,
+} from "@/lib/api";
+import type { ApiSource, ApiKnowledge } from "@/lib/types";
 
 interface KnowledgeEditorProps {
   knowledgeId: string;
@@ -23,15 +30,70 @@ interface KnowledgeEditorProps {
 }
 
 export function KnowledgeEditor({ knowledgeId, onBack }: KnowledgeEditorProps) {
-  const documents = useAppStore((s) => s.documents);
-  const knowledge = useAppStore((s) =>
-    s.knowledges.find((k) => k.id === knowledgeId)
-  );
-  const updateKnowledge = useAppStore((s) => s.updateKnowledge);
-  const removeKnowledge = useAppStore((s) => s.removeKnowledge);
-  const toggleDocumentInKnowledge = useAppStore(
-    (s) => s.toggleDocumentInKnowledge
-  );
+  const [sources, setSources] = useState<ApiSource[]>([]);
+  const [knowledge, setKnowledge] = useState<ApiKnowledge | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  const fetchData = useCallback(async () => {
+    try {
+      const [srcData, knData] = await Promise.all([
+        getSources(),
+        getKnowledges(),
+      ]);
+      setSources(srcData);
+      const found = knData.find((k) => k.id === knowledgeId);
+      setKnowledge(found ?? null);
+    } catch (error) {
+      console.error("Failed to load data:", error);
+    } finally {
+      setLoading(false);
+    }
+  }, [knowledgeId]);
+
+  useEffect(() => {
+    fetchData();
+  }, [fetchData]);
+
+  const handleUpdate = async (updates: Partial<Pick<ApiKnowledge, "name" | "description" | "source_ids">>) => {
+    if (!knowledge) return;
+    const updated = {
+      name: updates.name ?? knowledge.name,
+      description: updates.description ?? knowledge.description,
+      source_ids: updates.source_ids ?? knowledge.source_ids,
+    };
+    try {
+      const result = await updateKnowledge(knowledgeId, updated);
+      setKnowledge(result);
+    } catch (error) {
+      console.error("Failed to update knowledge:", error);
+    }
+  };
+
+  const toggleSource = (sourceId: string) => {
+    if (!knowledge) return;
+    const has = knowledge.source_ids.includes(sourceId);
+    const newIds = has
+      ? knowledge.source_ids.filter((id) => id !== sourceId)
+      : [...knowledge.source_ids, sourceId];
+    handleUpdate({ source_ids: newIds });
+  };
+
+  const handleDelete = async () => {
+    try {
+      await deleteKnowledge(knowledgeId);
+      onBack();
+    } catch (error) {
+      console.error("Failed to delete knowledge:", error);
+    }
+  };
+
+  if (loading) {
+    return (
+      <div className="text-center py-12 text-muted-foreground">
+        불러오는 중...
+      </div>
+    );
+  }
 
   if (!knowledge) {
     return (
@@ -44,13 +106,8 @@ export function KnowledgeEditor({ knowledgeId, onBack }: KnowledgeEditorProps) {
     );
   }
 
-  const handleDelete = () => {
-    removeKnowledge(knowledgeId);
-    onBack();
-  };
-
-  const includedDocs = documents.filter((d) =>
-    knowledge.documentIds.includes(d.id)
+  const includedSources = sources.filter((s) =>
+    knowledge.source_ids.includes(s.id)
   );
 
   return (
@@ -85,32 +142,30 @@ export function KnowledgeEditor({ knowledgeId, onBack }: KnowledgeEditorProps) {
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
         <div className="rounded-lg border p-4">
           <h3 className="font-semibold mb-3 text-sm text-muted-foreground">
-            전체 문서{" "}
+            전체 소스{" "}
             <span className="text-xs">(체크하여 추가/제거)</span>
           </h3>
           <div className="space-y-2">
-            {documents.map((doc) => {
-              const isChecked = knowledge.documentIds.includes(doc.id);
+            {sources.map((src) => {
+              const isChecked = knowledge.source_ids.includes(src.id);
               return (
                 <label
-                  key={doc.id}
+                  key={src.id}
                   className={`flex items-center gap-3 rounded-md p-2 cursor-pointer transition-colors ${
                     isChecked ? "bg-primary/10" : "hover:bg-accent"
                   }`}
                 >
                   <Checkbox
                     checked={isChecked}
-                    onCheckedChange={() =>
-                      toggleDocumentInKnowledge(knowledgeId, doc.id)
-                    }
+                    onCheckedChange={() => toggleSource(src.id)}
                   />
-                  <span className="text-sm">{doc.name}</span>
+                  <span className="text-sm">{src.name}</span>
                 </label>
               );
             })}
-            {documents.length === 0 && (
+            {sources.length === 0 && (
               <p className="text-sm text-muted-foreground">
-                문서가 없습니다. Documents 탭에서 추가해주세요.
+                소스가 없습니다. Sources 탭에서 추가해주세요.
               </p>
             )}
           </div>
@@ -123,9 +178,7 @@ export function KnowledgeEditor({ knowledgeId, onBack }: KnowledgeEditorProps) {
             </label>
             <Input
               value={knowledge.name}
-              onChange={(e) =>
-                updateKnowledge(knowledgeId, { name: e.target.value })
-              }
+              onChange={(e) => handleUpdate({ name: e.target.value })}
               className="mt-1"
             />
           </div>
@@ -135,9 +188,7 @@ export function KnowledgeEditor({ knowledgeId, onBack }: KnowledgeEditorProps) {
             </label>
             <Textarea
               value={knowledge.description}
-              onChange={(e) =>
-                updateKnowledge(knowledgeId, { description: e.target.value })
-              }
+              onChange={(e) => handleUpdate({ description: e.target.value })}
               className="mt-1"
               rows={3}
             />
@@ -147,20 +198,20 @@ export function KnowledgeEditor({ knowledgeId, onBack }: KnowledgeEditorProps) {
 
           <div>
             <h4 className="text-sm font-medium mb-2">
-              포함된 문서 ({includedDocs.length})
+              포함된 소스 ({includedSources.length})
             </h4>
             <div className="space-y-1">
-              {includedDocs.map((doc) => (
+              {includedSources.map((src) => (
                 <div
-                  key={doc.id}
+                  key={src.id}
                   className="flex items-center gap-2 rounded-md bg-primary/10 px-3 py-2 text-sm"
                 >
-                  {doc.name}
+                  {src.name}
                 </div>
               ))}
-              {includedDocs.length === 0 && (
+              {includedSources.length === 0 && (
                 <p className="text-sm text-muted-foreground">
-                  왼쪽 체크리스트에서 문서를 선택하세요.
+                  왼쪽 체크리스트에서 소스를 선택하세요.
                 </p>
               )}
             </div>

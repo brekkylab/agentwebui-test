@@ -1,5 +1,6 @@
 "use client";
 
+import { useState, useEffect } from "react";
 import { Plus } from "lucide-react";
 import {
   Card,
@@ -9,15 +10,23 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { useAppStore } from "@/lib/store";
+import { getKnowledges } from "@/lib/api";
+import type { ApiKnowledge } from "@/lib/types";
 
 interface KnowledgeGridProps {
   onSelect: (id: string) => void;
   onCreate: () => void;
+  refreshKey?: number;
 }
 
-export function KnowledgeGrid({ onSelect, onCreate }: KnowledgeGridProps) {
-  const knowledges = useAppStore((s) => s.knowledges);
+export function KnowledgeGrid({ onSelect, onCreate, refreshKey }: KnowledgeGridProps) {
+  const [knowledges, setKnowledges] = useState<ApiKnowledge[]>([]);
+
+  useEffect(() => {
+    getKnowledges()
+      .then(setKnowledges)
+      .catch((err) => console.error("Failed to load knowledges:", err));
+  }, [refreshKey]);
 
   return (
     <div>
@@ -41,7 +50,7 @@ export function KnowledgeGrid({ onSelect, onCreate }: KnowledgeGridProps) {
             </CardHeader>
             <CardContent>
               <span className="text-sm text-muted-foreground">
-                {kn.documentIds.length}개 문서
+                {kn.source_ids.length}개 소스
               </span>
             </CardContent>
           </Card>

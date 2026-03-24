@@ -3,32 +3,28 @@
 import { useCallback, useRef } from "react";
 import { Upload } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { useAppStore } from "@/lib/store";
-import type { Document } from "@/lib/types";
+import { uploadSource } from "@/lib/api";
 
-export function useFileUpload() {
-  const addDocument = useAppStore((s) => s.addDocument);
-
+export function useFileUpload(onUploaded?: () => void) {
   const handleFiles = useCallback(
-    (files: FileList) => {
-      Array.from(files).forEach((file) => {
-        const doc: Document = {
-          id: `doc-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
-          name: file.name,
-          size: file.size,
-          uploadedAt: new Date(),
-        };
-        addDocument(doc);
-      });
+    async (files: FileList) => {
+      for (const file of Array.from(files)) {
+        try {
+          await uploadSource(file);
+        } catch (error) {
+          console.error("Upload failed:", error);
+        }
+      }
+      onUploaded?.();
     },
-    [addDocument]
+    [onUploaded]
   );
 
   return { handleFiles };
 }
 
-export function UploadButton() {
-  const { handleFiles } = useFileUpload();
+export function UploadButton({ onUploaded }: { onUploaded?: () => void }) {
+  const { handleFiles } = useFileUpload(onUploaded);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   return (
@@ -44,7 +40,7 @@ export function UploadButton() {
         }}
       />
       <Button onClick={() => fileInputRef.current?.click()}>
-        <Upload className="h-4 w-4 mr-2" /> 문서 추가
+        <Upload className="h-4 w-4 mr-2" /> 소스 추가
       </Button>
     </>
   );
