@@ -1,5 +1,7 @@
+use actix_multipart::Multipart;
 use actix_web::http::StatusCode;
 use actix_web::{HttpResponse, web};
+use futures_util::StreamExt;
 use ailoy::{AgentProvider, LangModelAPISchema, LangModelProvider};
 use chat_agent::ChatAgentRunError;
 use serde::Serialize;
@@ -10,10 +12,11 @@ use crate::agent::spec::{
     AgentProvider as ApiAgentProvider, LangModelProvider as ApiLangModelProvider,
 };
 use crate::models::{
-    AddSessionMessageRequest, AddSessionMessageResponse, Agent, AgentResponse, CreateAgentRequest,
-    CreateProviderProfileRequest, CreateSessionRequest, ErrorResponse, ListSessionsQuery,
-    MessageRole, ProviderProfile, ProviderProfileResponse, Session, SessionMessage,
-    UpdateAgentRequest, UpdateProviderProfileRequest, UpdateSessionRequest,
+    AddSessionMessageRequest, AddSessionMessageResponse, Agent, AgentResponse,
+    CreateAgentRequest, CreateKnowledgeRequest, CreateProviderProfileRequest,
+    CreateSessionRequest, ErrorResponse, Knowledge, ListSessionsQuery, MessageRole,
+    ProviderProfile, ProviderProfileResponse, Session, SessionMessage, SourceResponse, SourceType,
+    UpdateAgentRequest, UpdateKnowledgeRequest, UpdateProviderProfileRequest, UpdateSessionRequest,
 };
 use crate::repository::RepositoryError;
 use crate::state::AppState;
@@ -42,7 +45,16 @@ struct HealthResponse {
         get_session,
         update_session,
         delete_session,
-        add_message
+        add_message,
+        upload_source,
+        list_sources,
+        get_source,
+        delete_source,
+        create_knowledge,
+        list_knowledges,
+        get_knowledge,
+        update_knowledge,
+        delete_knowledge
     ),
     components(
         schemas(
@@ -61,6 +73,11 @@ struct HealthResponse {
             UpdateSessionRequest,
             AddSessionMessageRequest,
             AddSessionMessageResponse,
+            SourceResponse,
+            SourceType,
+            Knowledge,
+            CreateKnowledgeRequest,
+            UpdateKnowledgeRequest,
             crate::agent::spec::AgentSpec,
             crate::agent::spec::LangModelAPISchema,
             crate::agent::spec::LangModelProvider,
@@ -73,7 +90,9 @@ struct HealthResponse {
         (name = "system", description = "System endpoints"),
         (name = "agents", description = "Agent endpoints"),
         (name = "provider_profiles", description = "Provider profile endpoints"),
-        (name = "sessions", description = "Session endpoints")
+        (name = "sessions", description = "Session endpoints"),
+        (name = "sources", description = "Source endpoints"),
+        (name = "knowledges", description = "Knowledge endpoints")
     )
 )]
 pub struct ApiDoc;
@@ -113,7 +132,28 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
                 .route(web::put().to(update_session))
                 .route(web::delete().to(delete_session)),
         )
-        .service(web::resource("/sessions/{id}/messages").route(web::post().to(add_message)));
+        .service(web::resource("/sessions/{id}/messages").route(web::post().to(add_message)))
+        .service(
+            web::resource("/sources")
+                .route(web::get().to(list_sources))
+                .route(web::post().to(upload_source)),
+        )
+        .service(
+            web::resource("/sources/{id}")
+                .route(web::get().to(get_source))
+                .route(web::delete().to(delete_source)),
+        )
+        .service(
+            web::resource("/knowledges")
+                .route(web::get().to(list_knowledges))
+                .route(web::post().to(create_knowledge)),
+        )
+        .service(
+            web::resource("/knowledges/{id}")
+                .route(web::get().to(get_knowledge))
+                .route(web::put().to(update_knowledge))
+                .route(web::delete().to(delete_knowledge)),
+        );
 }
 
 #[utoipa::path(
@@ -622,6 +662,272 @@ async fn add_message(
             HttpResponse::Ok().json(AddSessionMessageResponse { assistant_message })
         }
         Ok(None) => json_error(StatusCode::NOT_FOUND, "session not found"),
+        Err(error) => repository_error_response(error),
+    }
+}
+
+// ===================== Source Handlers =====================
+
+#[utoipa::path(
+    post,
+    path = "/sources",
+    tag = "sources",
+    responses(
+        (status = 201, description = "Uploaded source", body = SourceResponse),
+        (status = 400, description = "No file in request", body = ErrorResponse)
+    )
+)]
+async fn upload_source(
+    state: web::Data<AppState>,
+    mut payload: Multipart,
+) -> HttpResponse {
+    // Extract the first file field from the multipart stream
+    let mut file_name = String::new();
+    let mut file_bytes: Vec<u8> = Vec::new();
+
+    while let Some(Ok(mut field)) = payload.next().await {
+        if let Some(disposition) = field.content_disposition() {
+            if let Some(name) = disposition.get_filename() {
+                file_name = name.to_string();
+            }
+        }
+        while let Some(Ok(chunk)) = field.next().await {
+            file_bytes.extend_from_slice(&chunk);
+        }
+        // Only handle the first file
+        break;
+    }
+
+    if file_name.is_empty() || file_bytes.is_empty() {
+        return json_error(StatusCode::BAD_REQUEST, "no file in request");
+    }
+
+    let size = file_bytes.len() as i64;
+
+    // Build stored filename: {original}-{timestamp}.{ext}
+    let timestamp = chrono::Utc::now().timestamp_millis();
+    let stored_name = if let Some(dot_pos) = file_name.rfind('.') {
+        let (stem, ext) = file_name.split_at(dot_pos);
+        format!("{stem}-{timestamp}{ext}")
+    } else {
+        format!("{file_name}-{timestamp}")
+    };
+
+    let upload_dir = std::path::PathBuf::from("./data/uploads");
+    if let Err(error) = tokio::fs::create_dir_all(&upload_dir).await {
+        eprintln!("failed to create upload dir: {error}");
+        return json_error(StatusCode::INTERNAL_SERVER_ERROR, "failed to create upload directory");
+    }
+
+    let file_path = upload_dir.join(&stored_name);
+    if let Err(error) = tokio::fs::write(&file_path, &file_bytes).await {
+        eprintln!("failed to write file: {error}");
+        return json_error(StatusCode::INTERNAL_SERVER_ERROR, "failed to write file");
+    }
+
+    let file_path_str = file_path.to_string_lossy().to_string();
+
+    match state
+        .repository
+        .create_source(file_name, SourceType::LocalFile, Some(file_path_str), size)
+        .await
+    {
+        Ok(source) => HttpResponse::Created().json(SourceResponse::from(&source)),
+        Err(error) => repository_error_response(error),
+    }
+}
+
+#[utoipa::path(
+    get,
+    path = "/sources",
+    tag = "sources",
+    responses((status = 200, description = "List sources", body = [SourceResponse]))
+)]
+async fn list_sources(state: web::Data<AppState>) -> HttpResponse {
+    match state.repository.list_sources().await {
+        Ok(sources) => {
+            let response: Vec<SourceResponse> = sources.iter().map(SourceResponse::from).collect();
+            HttpResponse::Ok().json(response)
+        }
+        Err(error) => repository_error_response(error),
+    }
+}
+
+#[utoipa::path(
+    get,
+    path = "/sources/{id}",
+    tag = "sources",
+    params(("id" = Uuid, Path, description = "Source ID")),
+    responses(
+        (status = 200, description = "Source", body = SourceResponse),
+        (status = 404, description = "Source not found", body = ErrorResponse)
+    )
+)]
+async fn get_source(state: web::Data<AppState>, path: web::Path<Uuid>) -> HttpResponse {
+    let id = path.into_inner();
+
+    match state.repository.get_source(id).await {
+        Ok(Some(source)) => HttpResponse::Ok().json(SourceResponse::from(&source)),
+        Ok(None) => json_error(StatusCode::NOT_FOUND, "source not found"),
+        Err(error) => repository_error_response(error),
+    }
+}
+
+#[utoipa::path(
+    delete,
+    path = "/sources/{id}",
+    tag = "sources",
+    params(("id" = Uuid, Path, description = "Source ID")),
+    responses(
+        (status = 204, description = "Source deleted"),
+        (status = 404, description = "Source not found", body = ErrorResponse)
+    )
+)]
+async fn delete_source(state: web::Data<AppState>, path: web::Path<Uuid>) -> HttpResponse {
+    let id = path.into_inner();
+
+    // Get file_path before deleting from DB
+    let file_path = match state.repository.get_source(id).await {
+        Ok(Some(source)) => source.file_path,
+        Ok(None) => return json_error(StatusCode::NOT_FOUND, "source not found"),
+        Err(error) => return repository_error_response(error),
+    };
+
+    match state.repository.delete_source(id).await {
+        Ok(true) => {
+            // Delete file from disk
+            if let Some(path) = file_path {
+                if let Err(error) = tokio::fs::remove_file(&path).await {
+                    eprintln!("failed to delete file {path}: {error}");
+                }
+            }
+            HttpResponse::NoContent().finish()
+        }
+        Ok(false) => json_error(StatusCode::NOT_FOUND, "source not found"),
+        Err(error) => repository_error_response(error),
+    }
+}
+
+// ===================== Knowledge Handlers =====================
+
+#[utoipa::path(
+    post,
+    path = "/knowledges",
+    tag = "knowledges",
+    request_body = CreateKnowledgeRequest,
+    responses((status = 201, description = "Created knowledge", body = Knowledge))
+)]
+async fn create_knowledge(
+    state: web::Data<AppState>,
+    payload: web::Json<CreateKnowledgeRequest>,
+) -> HttpResponse {
+    let CreateKnowledgeRequest {
+        name,
+        description,
+        source_ids,
+    } = payload.into_inner();
+
+    if name.trim().is_empty() {
+        return json_error(StatusCode::BAD_REQUEST, "knowledge name is empty");
+    }
+
+    match state
+        .repository
+        .create_knowledge(name, description, source_ids)
+        .await
+    {
+        Ok(knowledge) => HttpResponse::Created().json(knowledge),
+        Err(error) => repository_error_response(error),
+    }
+}
+
+#[utoipa::path(
+    get,
+    path = "/knowledges",
+    tag = "knowledges",
+    responses((status = 200, description = "List knowledges", body = [Knowledge]))
+)]
+async fn list_knowledges(state: web::Data<AppState>) -> HttpResponse {
+    match state.repository.list_knowledges().await {
+        Ok(knowledges) => HttpResponse::Ok().json(knowledges),
+        Err(error) => repository_error_response(error),
+    }
+}
+
+#[utoipa::path(
+    get,
+    path = "/knowledges/{id}",
+    tag = "knowledges",
+    params(("id" = Uuid, Path, description = "Knowledge ID")),
+    responses(
+        (status = 200, description = "Knowledge", body = Knowledge),
+        (status = 404, description = "Knowledge not found", body = ErrorResponse)
+    )
+)]
+async fn get_knowledge(state: web::Data<AppState>, path: web::Path<Uuid>) -> HttpResponse {
+    let id = path.into_inner();
+
+    match state.repository.get_knowledge(id).await {
+        Ok(Some(knowledge)) => HttpResponse::Ok().json(knowledge),
+        Ok(None) => json_error(StatusCode::NOT_FOUND, "knowledge not found"),
+        Err(error) => repository_error_response(error),
+    }
+}
+
+#[utoipa::path(
+    put,
+    path = "/knowledges/{id}",
+    tag = "knowledges",
+    params(("id" = Uuid, Path, description = "Knowledge ID")),
+    request_body = UpdateKnowledgeRequest,
+    responses(
+        (status = 200, description = "Updated knowledge", body = Knowledge),
+        (status = 404, description = "Knowledge not found", body = ErrorResponse)
+    )
+)]
+async fn update_knowledge(
+    state: web::Data<AppState>,
+    path: web::Path<Uuid>,
+    payload: web::Json<UpdateKnowledgeRequest>,
+) -> HttpResponse {
+    let id = path.into_inner();
+    let UpdateKnowledgeRequest {
+        name,
+        description,
+        source_ids,
+    } = payload.into_inner();
+
+    if name.trim().is_empty() {
+        return json_error(StatusCode::BAD_REQUEST, "knowledge name is empty");
+    }
+
+    match state
+        .repository
+        .update_knowledge(id, name, description, source_ids)
+        .await
+    {
+        Ok(Some(knowledge)) => HttpResponse::Ok().json(knowledge),
+        Ok(None) => json_error(StatusCode::NOT_FOUND, "knowledge not found"),
+        Err(error) => repository_error_response(error),
+    }
+}
+
+#[utoipa::path(
+    delete,
+    path = "/knowledges/{id}",
+    tag = "knowledges",
+    params(("id" = Uuid, Path, description = "Knowledge ID")),
+    responses(
+        (status = 204, description = "Knowledge deleted"),
+        (status = 404, description = "Knowledge not found", body = ErrorResponse)
+    )
+)]
+async fn delete_knowledge(state: web::Data<AppState>, path: web::Path<Uuid>) -> HttpResponse {
+    let id = path.into_inner();
+
+    match state.repository.delete_knowledge(id).await {
+        Ok(true) => HttpResponse::NoContent().finish(),
+        Ok(false) => json_error(StatusCode::NOT_FOUND, "knowledge not found"),
         Err(error) => repository_error_response(error),
     }
 }
@@ -1481,5 +1787,385 @@ mod tests {
             .to_request();
         let delete_profile_resp = test::call_service(&app, delete_profile_req).await;
         assert_eq!(delete_profile_resp.status(), StatusCode::NO_CONTENT);
+    }
+
+    // ===================== Source Tests =====================
+
+    fn multipart_file_payload(filename: &str, content: &[u8]) -> (String, Vec<u8>) {
+        let boundary = "----TestBoundary7MA4YWxkTrZu0gW";
+        let mut body = Vec::new();
+        body.extend_from_slice(format!("--{boundary}\r\n").as_bytes());
+        body.extend_from_slice(
+            format!(
+                "Content-Disposition: form-data; name=\"file\"; filename=\"{filename}\"\r\n"
+            )
+            .as_bytes(),
+        );
+        body.extend_from_slice(b"Content-Type: application/octet-stream\r\n\r\n");
+        body.extend_from_slice(content);
+        body.extend_from_slice(format!("\r\n--{boundary}--\r\n").as_bytes());
+        (boundary.to_string(), body)
+    }
+
+    async fn upload_source(
+        app: &impl Service<
+            actix_http::Request,
+            Response = actix_web::dev::ServiceResponse,
+            Error = actix_web::Error,
+        >,
+        filename: &str,
+        content: &[u8],
+    ) -> Value {
+        let (boundary, body) = multipart_file_payload(filename, content);
+        let req = test::TestRequest::post()
+            .uri("/sources")
+            .insert_header((
+                "Content-Type",
+                format!("multipart/form-data; boundary={boundary}"),
+            ))
+            .set_payload(body)
+            .to_request();
+        test::call_and_read_body_json(app, req).await
+    }
+
+    #[actix_web::test]
+    async fn source_upload_and_list() {
+        let temp_dir = TempDir::new().expect("temp dir should be created");
+        let database_url = test_database_url(&temp_dir);
+        let state = web::Data::new(
+            AppState::new_without_bootstrap(&database_url)
+                .await
+                .expect("state should be created"),
+        );
+        let app = test::init_service(App::new().app_data(state).configure(configure)).await;
+
+        // Upload a source
+        let body = upload_source(&app, "test-doc.pdf", b"fake pdf content").await;
+        assert_eq!(body["name"], Value::String("test-doc.pdf".to_string()));
+        assert_eq!(body["source_type"], Value::String("local_file".to_string()));
+        assert_eq!(body["size"], json!(16)); // b"fake pdf content".len()
+        assert!(body["id"].as_str().is_some());
+        // file_path must NOT be exposed in response
+        assert!(body.get("file_path").is_none());
+
+        let source_id = body["id"].as_str().expect("source id must exist").to_string();
+
+        // List sources
+        let list_req = test::TestRequest::get().uri("/sources").to_request();
+        let list_body: Value = test::call_and_read_body_json(&app, list_req).await;
+        let sources = list_body.as_array().expect("sources should be array");
+        assert_eq!(sources.len(), 1);
+        assert_eq!(sources[0]["name"], Value::String("test-doc.pdf".to_string()));
+
+        // Get source by ID
+        let get_req = test::TestRequest::get()
+            .uri(&format!("/sources/{source_id}"))
+            .to_request();
+        let get_body: Value = test::call_and_read_body_json(&app, get_req).await;
+        assert_eq!(get_body["id"], Value::String(source_id.clone()));
+        assert_eq!(get_body["name"], Value::String("test-doc.pdf".to_string()));
+
+        // Delete source
+        let delete_req = test::TestRequest::delete()
+            .uri(&format!("/sources/{source_id}"))
+            .to_request();
+        let delete_resp = test::call_service(&app, delete_req).await;
+        assert_eq!(delete_resp.status(), StatusCode::NO_CONTENT);
+
+        // Verify deleted
+        let get_after_delete = test::TestRequest::get()
+            .uri(&format!("/sources/{source_id}"))
+            .to_request();
+        let resp = test::call_service(&app, get_after_delete).await;
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[actix_web::test]
+    async fn source_upload_no_file_returns_bad_request() {
+        let temp_dir = TempDir::new().expect("temp dir should be created");
+        let database_url = test_database_url(&temp_dir);
+        let state = web::Data::new(
+            AppState::new_without_bootstrap(&database_url)
+                .await
+                .expect("state should be created"),
+        );
+        let app = test::init_service(App::new().app_data(state).configure(configure)).await;
+
+        // Send empty multipart
+        let boundary = "----TestBoundary";
+        let body = format!("--{boundary}--\r\n");
+        let req = test::TestRequest::post()
+            .uri("/sources")
+            .insert_header((
+                "Content-Type",
+                format!("multipart/form-data; boundary={boundary}"),
+            ))
+            .set_payload(body)
+            .to_request();
+        let resp = test::call_service(&app, req).await;
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[actix_web::test]
+    async fn source_delete_not_found() {
+        let temp_dir = TempDir::new().expect("temp dir should be created");
+        let database_url = test_database_url(&temp_dir);
+        let state = web::Data::new(
+            AppState::new_without_bootstrap(&database_url)
+                .await
+                .expect("state should be created"),
+        );
+        let app = test::init_service(App::new().app_data(state).configure(configure)).await;
+
+        let req = test::TestRequest::delete()
+            .uri(&format!("/sources/{}", Uuid::new_v4()))
+            .to_request();
+        let resp = test::call_service(&app, req).await;
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    }
+
+    // ===================== Knowledge Tests =====================
+
+    #[actix_web::test]
+    async fn knowledge_crud() {
+        let temp_dir = TempDir::new().expect("temp dir should be created");
+        let database_url = test_database_url(&temp_dir);
+        let state = web::Data::new(
+            AppState::new_without_bootstrap(&database_url)
+                .await
+                .expect("state should be created"),
+        );
+        let app = test::init_service(App::new().app_data(state).configure(configure)).await;
+
+        // Create knowledge
+        let create_req = test::TestRequest::post()
+            .uri("/knowledges")
+            .set_json(json!({
+                "name": "마케팅 자료",
+                "description": "마케팅 전략 관련 자료",
+                "source_ids": []
+            }))
+            .to_request();
+        let create_body: Value = test::call_and_read_body_json(&app, create_req).await;
+        assert_eq!(create_body["name"], Value::String("마케팅 자료".to_string()));
+        assert_eq!(
+            create_body["description"],
+            Value::String("마케팅 전략 관련 자료".to_string())
+        );
+        assert_eq!(create_body["source_ids"], json!([]));
+
+        let knowledge_id = create_body["id"]
+            .as_str()
+            .expect("knowledge id must exist")
+            .to_string();
+
+        // List knowledges
+        let list_req = test::TestRequest::get().uri("/knowledges").to_request();
+        let list_body: Value = test::call_and_read_body_json(&app, list_req).await;
+        let knowledges = list_body.as_array().expect("knowledges should be array");
+        assert_eq!(knowledges.len(), 1);
+
+        // Get knowledge
+        let get_req = test::TestRequest::get()
+            .uri(&format!("/knowledges/{knowledge_id}"))
+            .to_request();
+        let get_body: Value = test::call_and_read_body_json(&app, get_req).await;
+        assert_eq!(get_body["name"], Value::String("마케팅 자료".to_string()));
+
+        // Update knowledge
+        let update_req = test::TestRequest::put()
+            .uri(&format!("/knowledges/{knowledge_id}"))
+            .set_json(json!({
+                "name": "업데이트된 자료",
+                "description": "새로운 설명",
+                "source_ids": []
+            }))
+            .to_request();
+        let update_body: Value = test::call_and_read_body_json(&app, update_req).await;
+        assert_eq!(
+            update_body["name"],
+            Value::String("업데이트된 자료".to_string())
+        );
+        assert_eq!(
+            update_body["description"],
+            Value::String("새로운 설명".to_string())
+        );
+
+        // Delete knowledge
+        let delete_req = test::TestRequest::delete()
+            .uri(&format!("/knowledges/{knowledge_id}"))
+            .to_request();
+        let delete_resp = test::call_service(&app, delete_req).await;
+        assert_eq!(delete_resp.status(), StatusCode::NO_CONTENT);
+
+        // Verify deleted
+        let get_after_delete = test::TestRequest::get()
+            .uri(&format!("/knowledges/{knowledge_id}"))
+            .to_request();
+        let resp = test::call_service(&app, get_after_delete).await;
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[actix_web::test]
+    async fn knowledge_create_empty_name_returns_bad_request() {
+        let temp_dir = TempDir::new().expect("temp dir should be created");
+        let database_url = test_database_url(&temp_dir);
+        let state = web::Data::new(
+            AppState::new_without_bootstrap(&database_url)
+                .await
+                .expect("state should be created"),
+        );
+        let app = test::init_service(App::new().app_data(state).configure(configure)).await;
+
+        let req = test::TestRequest::post()
+            .uri("/knowledges")
+            .set_json(json!({
+                "name": "  ",
+                "description": "desc"
+            }))
+            .to_request();
+        let resp = test::call_service(&app, req).await;
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[actix_web::test]
+    async fn knowledge_with_source_ids() {
+        let temp_dir = TempDir::new().expect("temp dir should be created");
+        let database_url = test_database_url(&temp_dir);
+        let state = web::Data::new(
+            AppState::new_without_bootstrap(&database_url)
+                .await
+                .expect("state should be created"),
+        );
+        let app = test::init_service(App::new().app_data(state).configure(configure)).await;
+
+        // Upload two sources
+        let src1 = upload_source(&app, "doc1.pdf", b"content1").await;
+        let src2 = upload_source(&app, "doc2.pdf", b"content2").await;
+        let src1_id = src1["id"].as_str().expect("src1 id").to_string();
+        let src2_id = src2["id"].as_str().expect("src2 id").to_string();
+
+        // Create knowledge with source_ids
+        let create_req = test::TestRequest::post()
+            .uri("/knowledges")
+            .set_json(json!({
+                "name": "기술 문서",
+                "description": "API 관련 자료",
+                "source_ids": [src1_id, src2_id]
+            }))
+            .to_request();
+        let create_body: Value = test::call_and_read_body_json(&app, create_req).await;
+        let source_ids = create_body["source_ids"]
+            .as_array()
+            .expect("source_ids should be array");
+        assert_eq!(source_ids.len(), 2);
+
+        let knowledge_id = create_body["id"]
+            .as_str()
+            .expect("knowledge id")
+            .to_string();
+
+        // Update: remove one source, keep the other
+        let update_req = test::TestRequest::put()
+            .uri(&format!("/knowledges/{knowledge_id}"))
+            .set_json(json!({
+                "name": "기술 문서",
+                "description": "API 관련 자료",
+                "source_ids": [src1_id]
+            }))
+            .to_request();
+        let update_body: Value = test::call_and_read_body_json(&app, update_req).await;
+        let updated_ids = update_body["source_ids"]
+            .as_array()
+            .expect("source_ids should be array");
+        assert_eq!(updated_ids.len(), 1);
+        assert_eq!(updated_ids[0], Value::String(src1_id.clone()));
+    }
+
+    #[actix_web::test]
+    async fn delete_source_cascades_to_knowledge_sources() {
+        let temp_dir = TempDir::new().expect("temp dir should be created");
+        let database_url = test_database_url(&temp_dir);
+        let state = web::Data::new(
+            AppState::new_without_bootstrap(&database_url)
+                .await
+                .expect("state should be created"),
+        );
+        let app = test::init_service(App::new().app_data(state).configure(configure)).await;
+
+        // Upload a source
+        let src = upload_source(&app, "cascade-test.pdf", b"cascade").await;
+        let src_id = src["id"].as_str().expect("source id").to_string();
+
+        // Create knowledge referencing the source
+        let create_req = test::TestRequest::post()
+            .uri("/knowledges")
+            .set_json(json!({
+                "name": "Cascade Test",
+                "description": "test",
+                "source_ids": [src_id]
+            }))
+            .to_request();
+        let create_body: Value = test::call_and_read_body_json(&app, create_req).await;
+        let knowledge_id = create_body["id"]
+            .as_str()
+            .expect("knowledge id")
+            .to_string();
+
+        // Verify source_ids contains the source
+        assert_eq!(create_body["source_ids"], json!([src_id]));
+
+        // Delete the source
+        let delete_req = test::TestRequest::delete()
+            .uri(&format!("/sources/{src_id}"))
+            .to_request();
+        let delete_resp = test::call_service(&app, delete_req).await;
+        assert_eq!(delete_resp.status(), StatusCode::NO_CONTENT);
+
+        // Knowledge should still exist, but source_ids should be empty (cascaded)
+        let get_knowledge = test::TestRequest::get()
+            .uri(&format!("/knowledges/{knowledge_id}"))
+            .to_request();
+        let knowledge_body: Value = test::call_and_read_body_json(&app, get_knowledge).await;
+        assert_eq!(knowledge_body["source_ids"], json!([]));
+    }
+
+    #[actix_web::test]
+    async fn knowledge_not_found_returns_404() {
+        let temp_dir = TempDir::new().expect("temp dir should be created");
+        let database_url = test_database_url(&temp_dir);
+        let state = web::Data::new(
+            AppState::new_without_bootstrap(&database_url)
+                .await
+                .expect("state should be created"),
+        );
+        let app = test::init_service(App::new().app_data(state).configure(configure)).await;
+
+        let fake_id = Uuid::new_v4();
+
+        let get_req = test::TestRequest::get()
+            .uri(&format!("/knowledges/{fake_id}"))
+            .to_request();
+        assert_eq!(
+            test::call_service(&app, get_req).await.status(),
+            StatusCode::NOT_FOUND
+        );
+
+        let update_req = test::TestRequest::put()
+            .uri(&format!("/knowledges/{fake_id}"))
+            .set_json(json!({"name": "x", "description": "y", "source_ids": []}))
+            .to_request();
+        assert_eq!(
+            test::call_service(&app, update_req).await.status(),
+            StatusCode::NOT_FOUND
+        );
+
+        let delete_req = test::TestRequest::delete()
+            .uri(&format!("/knowledges/{fake_id}"))
+            .to_request();
+        assert_eq!(
+            test::call_service(&app, delete_req).await.status(),
+            StatusCode::NOT_FOUND
+        );
     }
 }

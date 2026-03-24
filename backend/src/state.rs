@@ -9,7 +9,7 @@ use uuid::Uuid;
 
 use crate::models::Session;
 use crate::repository::{
-    Repository, RepositoryError, RepositoryResult, create_repository, create_repository_from_env,
+    Repository, RepositoryError, RepositoryResult, create_repository_from_env,
 };
 
 #[derive(Clone)]
@@ -40,6 +40,8 @@ impl AppState {
 
     #[cfg(test)]
     pub async fn new_without_bootstrap(database_url: &str) -> RepositoryResult<Self> {
+        use crate::repository::create_repository;
+
         let repository = create_repository(database_url).await?;
         Ok(Self {
             repository,
