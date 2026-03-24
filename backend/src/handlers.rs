@@ -713,7 +713,7 @@ async fn upload_source(
         format!("{file_name}-{timestamp}")
     };
 
-    let upload_dir = std::path::PathBuf::from("./data/uploads");
+    let upload_dir = state.upload_dir.clone();
     if let Err(error) = tokio::fs::create_dir_all(&upload_dir).await {
         eprintln!("failed to create upload dir: {error}");
         return json_error(StatusCode::INTERNAL_SERVER_ERROR, "failed to create upload directory");
@@ -1057,6 +1057,16 @@ mod tests {
 
     fn test_database_url(temp_dir: &TempDir) -> String {
         format!("sqlite://{}", temp_dir.path().join("app.db").display())
+    }
+
+    async fn test_state_with_upload_dir(temp_dir: &TempDir) -> web::Data<AppState> {
+        let database_url = test_database_url(temp_dir);
+        let upload_dir = temp_dir.path().join("uploads");
+        web::Data::new(
+            AppState::new_without_bootstrap_with_upload_dir(&database_url, upload_dir)
+                .await
+                .expect("state should be created"),
+        )
     }
 
     async fn create_agent(
@@ -1831,12 +1841,7 @@ mod tests {
     #[actix_web::test]
     async fn source_upload_and_list() {
         let temp_dir = TempDir::new().expect("temp dir should be created");
-        let database_url = test_database_url(&temp_dir);
-        let state = web::Data::new(
-            AppState::new_without_bootstrap(&database_url)
-                .await
-                .expect("state should be created"),
-        );
+        let state = test_state_with_upload_dir(&temp_dir).await;
         let app = test::init_service(App::new().app_data(state).configure(configure)).await;
 
         // Upload a source
@@ -1883,12 +1888,7 @@ mod tests {
     #[actix_web::test]
     async fn source_upload_no_file_returns_bad_request() {
         let temp_dir = TempDir::new().expect("temp dir should be created");
-        let database_url = test_database_url(&temp_dir);
-        let state = web::Data::new(
-            AppState::new_without_bootstrap(&database_url)
-                .await
-                .expect("state should be created"),
-        );
+        let state = test_state_with_upload_dir(&temp_dir).await;
         let app = test::init_service(App::new().app_data(state).configure(configure)).await;
 
         // Send empty multipart
@@ -1909,12 +1909,7 @@ mod tests {
     #[actix_web::test]
     async fn source_delete_not_found() {
         let temp_dir = TempDir::new().expect("temp dir should be created");
-        let database_url = test_database_url(&temp_dir);
-        let state = web::Data::new(
-            AppState::new_without_bootstrap(&database_url)
-                .await
-                .expect("state should be created"),
-        );
+        let state = test_state_with_upload_dir(&temp_dir).await;
         let app = test::init_service(App::new().app_data(state).configure(configure)).await;
 
         let req = test::TestRequest::delete()
@@ -2031,12 +2026,7 @@ mod tests {
     #[actix_web::test]
     async fn knowledge_with_source_ids() {
         let temp_dir = TempDir::new().expect("temp dir should be created");
-        let database_url = test_database_url(&temp_dir);
-        let state = web::Data::new(
-            AppState::new_without_bootstrap(&database_url)
-                .await
-                .expect("state should be created"),
-        );
+        let state = test_state_with_upload_dir(&temp_dir).await;
         let app = test::init_service(App::new().app_data(state).configure(configure)).await;
 
         // Upload two sources
@@ -2085,12 +2075,7 @@ mod tests {
     #[actix_web::test]
     async fn delete_source_cascades_to_knowledge_sources() {
         let temp_dir = TempDir::new().expect("temp dir should be created");
-        let database_url = test_database_url(&temp_dir);
-        let state = web::Data::new(
-            AppState::new_without_bootstrap(&database_url)
-                .await
-                .expect("state should be created"),
-        );
+        let state = test_state_with_upload_dir(&temp_dir).await;
         let app = test::init_service(App::new().app_data(state).configure(configure)).await;
 
         // Upload a source

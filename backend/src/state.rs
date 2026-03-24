@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use ailoy::{AgentProvider, LangModelAPISchema, LangModelProvider};
@@ -21,6 +22,7 @@ struct CachedRuntime {
 
 pub struct AppState {
     pub repository: Arc<dyn Repository>,
+    pub upload_dir: PathBuf,
     runtime_cache: Mutex<HashMap<Uuid, CachedRuntime>>,
 }
 
@@ -29,6 +31,7 @@ impl AppState {
         let repository = create_repository_from_env().await.map_err(to_io_error)?;
         let state = Self {
             repository,
+            upload_dir: PathBuf::from("./data/uploads"),
             runtime_cache: Mutex::new(HashMap::new()),
         };
         state
@@ -39,14 +42,27 @@ impl AppState {
     }
 
     #[cfg(test)]
-    pub async fn new_without_bootstrap(database_url: &str) -> RepositoryResult<Self> {
+    pub async fn new_without_bootstrap_with_upload_dir(
+        database_url: &str,
+        upload_dir: PathBuf,
+    ) -> RepositoryResult<Self> {
         use crate::repository::create_repository;
 
         let repository = create_repository(database_url).await?;
         Ok(Self {
             repository,
+            upload_dir,
             runtime_cache: Mutex::new(HashMap::new()),
         })
+    }
+
+    #[cfg(test)]
+    pub async fn new_without_bootstrap(database_url: &str) -> RepositoryResult<Self> {
+        Self::new_without_bootstrap_with_upload_dir(
+            database_url,
+            PathBuf::from("./data/uploads"),
+        )
+        .await
     }
 
     pub fn invalidate_session_runtime(&self, session_id: Uuid) {
