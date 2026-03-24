@@ -1,9 +1,7 @@
 use actix_web::http::StatusCode;
 use actix_web::{HttpResponse, web};
-use ailoy::{
-    AgentProvider, LangModelAPISchema, LangModelProvider, Message as RuntimeMessage,
-    Part as RuntimePart, Role as RuntimeRole,
-};
+use ailoy::{AgentProvider, LangModelAPISchema, LangModelProvider};
+use chat_agent::ChatAgentRunError;
 use serde::Serialize;
 use utoipa::{OpenApi, ToSchema};
 use uuid::Uuid;
@@ -590,25 +588,21 @@ async fn add_message(
         }
     };
 
-    let query = RuntimeMessage::new(RuntimeRole::User).with_contents([RuntimePart::text(content)]);
-
     let runtime_output = {
         let mut runtime = runtime.lock().await;
-        runtime.run(query).await
+        runtime.run_user_text(content).await
     };
 
     let assistant_text = match runtime_output {
-        Ok(message) => match extract_assistant_text(&message) {
-            Some(text) => text,
-            None => {
-                return json_error(
-                    StatusCode::BAD_GATEWAY,
-                    "model response did not include text content",
-                );
-            }
-        },
-        Err(error) => {
-            eprintln!("runtime execution error: {error}");
+        Ok(text) => text,
+        Err(ChatAgentRunError::NoTextContent) => {
+            return json_error(
+                StatusCode::BAD_GATEWAY,
+                "model response did not include text content",
+            );
+        }
+        Err(ChatAgentRunError::Runtime { source }) => {
+            eprintln!("runtime execution error: {source}");
             return json_error(StatusCode::BAD_GATEWAY, "failed to run language model");
         }
     };
@@ -709,17 +703,6 @@ fn to_provider_profile_response(profile: &ProviderProfile) -> ProviderProfileRes
         created_at: profile.created_at,
         updated_at: profile.updated_at,
     }
-}
-
-fn extract_assistant_text(message: &RuntimeMessage) -> Option<String> {
-    let text = message
-        .contents
-        .iter()
-        .filter_map(|part| part.as_text())
-        .collect::<Vec<_>>()
-        .join("");
-
-    if text.is_empty() { None } else { Some(text) }
 }
 
 fn repository_error_response(error: RepositoryError) -> HttpResponse {
