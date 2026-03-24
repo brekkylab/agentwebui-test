@@ -4,5 +4,6 @@
 //! Session management and backend integration are handled in later phases.
 
 mod chat_agent;
+mod knowledge;
 
-pub use chat_agent::{ChatAgent, ChatAgentRunError};
+pub use chat_agent::{ChatAgent, ChatAgentRunError, ToolCallEntry};
