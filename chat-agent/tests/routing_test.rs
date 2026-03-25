@@ -11,24 +11,31 @@
 //! Run:  cargo test --test routing_test -- --ignored --nocapture
 
 use std::path::PathBuf;
+use std::sync::Once;
 
 use ailoy::{AgentProvider, AgentSpec, LangModelAPISchema, LangModelProvider};
 use chat_agent::ChatAgent;
 
+static INIT_KB_CONFIG: Once = Once::new();
+
 /// Set KNOWLEDGE_AGENTS_CONFIG to the backend's knowledge_agents.json
 /// relative to this crate's location, so tests work regardless of CWD.
+/// Uses `Once` to ensure the env var is set exactly once, even under
+/// parallel test execution.
 fn ensure_kb_config() {
-    if std::env::var("KNOWLEDGE_AGENTS_CONFIG").is_ok() {
-        return;
-    }
-    // chat-agent/../backend/data/knowledge_agents.json
-    let path: PathBuf = [env!("CARGO_MANIFEST_DIR"), "..", "backend", "data", "knowledge_agents.json"]
-        .iter()
-        .collect();
-    // SAFETY: tests run before any threads spawn, so mutating env is safe here.
-    unsafe {
-        std::env::set_var("KNOWLEDGE_AGENTS_CONFIG", path.canonicalize().expect("knowledge_agents.json not found"));
-    }
+    INIT_KB_CONFIG.call_once(|| {
+        if std::env::var("KNOWLEDGE_AGENTS_CONFIG").is_ok() {
+            return;
+        }
+        // chat-agent/../backend/data/knowledge_agents.json
+        let path: PathBuf = [env!("CARGO_MANIFEST_DIR"), "..", "backend", "data", "knowledge_agents.json"]
+            .iter()
+            .collect();
+        // SAFETY: called exactly once before any parallel tests read this var.
+        unsafe {
+            std::env::set_var("KNOWLEDGE_AGENTS_CONFIG", path.canonicalize().expect("knowledge_agents.json not found"));
+        }
+    });
 }
 
 fn create_agent(model: &str) -> ChatAgent {

@@ -8,6 +8,8 @@ use ailoy::{
 };
 use futures::StreamExt as _;
 
+use crate::knowledge::{self, KbEntry};
+
 const DEFAULT_TOOL_UTC_NOW: &str = "utc_now";
 const DEFAULT_TOOL_ADD_INTEGERS: &str = "add_integers";
 
@@ -41,7 +43,7 @@ pub enum ChatAgentRunError {
 
 impl ChatAgent {
     pub fn new(mut spec: AgentSpec, provider: AgentProvider) -> Self {
-        let kb_entries = crate::knowledge::load_kb_config();
+        let kb_entries = knowledge::load_kb_config();
         ensure_default_tool_names(&mut spec, &kb_entries);
         let runtime = AgentRuntime::new(spec, provider, build_tool_set(&kb_entries));
         Self {
@@ -67,6 +69,8 @@ impl ChatAgent {
         &mut self,
         content: impl Into<String>,
     ) -> Result<String, ChatAgentRunError> {
+        // Clear previous turn's tool log so only the current query's calls are visible
+        self.tool_log.clear();
         let query = Message::new(Role::User).with_contents([Part::text(content.into())]);
         let mut strm = self.runtime.stream_turn(query);
 
@@ -91,11 +95,13 @@ impl ChatAgent {
                 last_assistant = Some(msg.clone());
             }
 
-            // Attach tool results to the most recent matching entry
+            // Attach tool result to the earliest entry still awaiting a response.
+            // ailoy's stream_turn yields results in the same order as the calls,
+            // so sequential matching is correct even with parallel tool calls.
             if msg.role == Role::Tool {
                 for part in &msg.contents {
                     if let Some(value) = part.as_value() {
-                        if let Some(entry) = self.tool_log.last_mut() {
+                        if let Some(entry) = self.tool_log.iter_mut().find(|e| e.result.is_none()) {
                             entry.result = Some(ailoy_to_json(value));
                         }
                     }
@@ -112,14 +118,13 @@ impl ChatAgent {
 
 /// Convert ailoy `Value` to `serde_json::Value` without exposing ailoy types.
 fn ailoy_to_json(v: &Value) -> serde_json::Value {
-    let json: serde_json::Value = v.clone().into();
-    json
+    v.clone().into()
 }
 
-fn ensure_default_tool_names(spec: &mut AgentSpec, kb_entries: &[crate::knowledge::KbEntry]) {
+fn ensure_default_tool_names(spec: &mut AgentSpec, kb_entries: &[KbEntry]) {
     let mut tool_names: Vec<&str> = vec![DEFAULT_TOOL_UTC_NOW, DEFAULT_TOOL_ADD_INTEGERS];
     if !kb_entries.is_empty() {
-        tool_names.push(crate::knowledge::tool_name());
+        tool_names.push(knowledge::ASK_KNOWLEDGE_TOOL);
     }
     for tool_name in tool_names {
         if !spec.tools.iter().any(|name| name == tool_name) {
@@ -141,9 +146,9 @@ fn build_default_tool_set() -> ToolSet {
     tool_set
 }
 
-fn build_tool_set(kb_entries: &[crate::knowledge::KbEntry]) -> ToolSet {
+fn build_tool_set(kb_entries: &[KbEntry]) -> ToolSet {
     let mut tool_set = build_default_tool_set();
-    if let Some((name, runtime)) = crate::knowledge::build_knowledge_tool(kb_entries) {
+    if let Some((name, runtime)) = knowledge::build_knowledge_tool(kb_entries) {
         tool_set.insert(name, runtime);
     }
     tool_set

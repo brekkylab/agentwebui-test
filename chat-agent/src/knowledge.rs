@@ -15,10 +15,11 @@ use std::sync::Arc;
 
 use ailoy::agent::ToolFunc;
 use ailoy::{ToolDescBuilder, ToolRuntime, Value};
+use knowledge_agent::{AgentConfig, SearchIndex, ToolConfig, build_agent, run_with_trace};
 use serde::Deserialize;
 
 const KNOWLEDGE_AGENTS_CONFIG: &str = "./data/knowledge_agents.json";
-const TOOL_NAME: &str = "ask_knowledge";
+pub const ASK_KNOWLEDGE_TOOL: &str = "ask_knowledge";
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct KbEntry {
@@ -28,7 +29,7 @@ pub struct KbEntry {
     pub corpus_dirs: Vec<String>,
 }
 
-/// Load KB configuration from `KB_CONFIG_PATH` env var or `./knowledge_agents.json`.
+/// Load KB configuration from `KNOWLEDGE_AGENTS_CONFIG` env var or `./data/knowledge_agents.json`.
 /// Relative paths in `index_dir` and `corpus_dirs` are resolved against the
 /// directory containing the JSON config file, not the process CWD.
 /// Returns empty Vec if file is missing or unparseable.
@@ -36,8 +37,12 @@ pub fn load_kb_config() -> Vec<KbEntry> {
     let path = PathBuf::from(
         std::env::var("KNOWLEDGE_AGENTS_CONFIG").unwrap_or_else(|_| KNOWLEDGE_AGENTS_CONFIG.to_string()),
     );
-    let Ok(content) = std::fs::read_to_string(&path) else {
-        return vec![];
+    let content = match std::fs::read_to_string(&path) {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("[knowledge] config not found at {}: {e}", path.display());
+            return vec![];
+        }
     };
     let base_dir = path
         .canonicalize()
@@ -45,7 +50,13 @@ pub fn load_kb_config() -> Vec<KbEntry> {
         .and_then(|p| p.parent().map(|d| d.to_path_buf()))
         .unwrap_or_else(|| PathBuf::from("."));
 
-    let mut entries: Vec<KbEntry> = serde_json::from_str(&content).unwrap_or_default();
+    let mut entries: Vec<KbEntry> = match serde_json::from_str(&content) {
+        Ok(v) => v,
+        Err(e) => {
+            eprintln!("[knowledge] failed to parse {}: {e}", path.display());
+            return vec![];
+        }
+    };
     for entry in &mut entries {
         entry.index_dir = resolve_path(&base_dir, &entry.index_dir);
         entry.corpus_dirs = entry
@@ -76,11 +87,7 @@ pub fn build_knowledge_tool(entries: &[KbEntry]) -> Option<(String, ToolRuntime)
 
     let desc = ask_knowledge_desc(entries);
     let func = ask_knowledge_func(entries.to_vec());
-    Some((TOOL_NAME.to_string(), ToolRuntime::new(desc, func)))
-}
-
-pub fn tool_name() -> &'static str {
-    TOOL_NAME
+    Some((ASK_KNOWLEDGE_TOOL.to_string(), ToolRuntime::new(desc, func)))
 }
 
 fn ask_knowledge_desc(entries: &[KbEntry]) -> ailoy::ToolDesc {
@@ -90,7 +97,7 @@ fn ask_knowledge_desc(entries: &[KbEntry]) -> ailoy::ToolDesc {
         .collect::<Vec<_>>()
         .join("\n");
 
-    ToolDescBuilder::new(TOOL_NAME)
+    ToolDescBuilder::new(ASK_KNOWLEDGE_TOOL)
         .description(format!(
             "Query a knowledge base to find answers from pre-indexed document corpora.\n\
              Available knowledge bases:\n{kb_list}"
@@ -161,13 +168,11 @@ fn ask_knowledge_func(entries: Vec<KbEntry>) -> Arc<ToolFunc> {
             };
 
             match spawn_sub_agent(&entry, &question).await {
-                Ok(answer) => Value::object([
-                    ("answer", Value::string(answer)),
-                    // _meta fields: routing trace — which KB handled this query
-                    ("_meta_kb_id", Value::string(kb_id)),
-                    ("_meta_question", Value::string(question)),
-                ]),
-                Err(e) => error_value(&e.to_string()),
+                Ok(answer) => Value::object([("answer", Value::string(answer))]),
+                Err(e) => {
+                    eprintln!("[knowledge] sub-agent error for kb={kb_id}: {e}");
+                    error_value(&e.to_string())
+                }
             }
         })
     })
@@ -177,21 +182,21 @@ fn ask_knowledge_func(entries: Vec<KbEntry>) -> Arc<ToolFunc> {
 /// The sub-agent (and its search index handle) are dropped when this function returns.
 async fn spawn_sub_agent(entry: &KbEntry, question: &str) -> anyhow::Result<String> {
     let index_path = Path::new(&entry.index_dir);
-    let search_index = Arc::new(knowledge_agent::SearchIndex::open(index_path)?);
+    let search_index = Arc::new(SearchIndex::open(index_path)?);
 
     let target_dirs: Vec<PathBuf> = entry.corpus_dirs.iter().map(PathBuf::from).collect();
-    let agent_config = knowledge_agent::AgentConfig::default();
-    let tool_config = knowledge_agent::ToolConfig::default();
+    let agent_config = AgentConfig::default();
+    let tool_config = ToolConfig::default();
 
     // Create sub-agent — it owns its own ReAct loop, independent of the parent ChatAgent
-    let mut sub_agent = knowledge_agent::build_agent(
+    let mut sub_agent = build_agent(
         &agent_config,
         &tool_config,
         &search_index,
         target_dirs,
     );
 
-    let (answer, _steps) = knowledge_agent::run_with_trace(&mut sub_agent, question).await?;
+    let (answer, _steps) = run_with_trace(&mut sub_agent, question).await?;
     Ok(answer)
     // sub_agent is dropped here
 }
