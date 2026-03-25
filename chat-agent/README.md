@@ -82,9 +82,15 @@ Each sub-agent is stateless — created, runs a single query, and immediately dr
 
 ### Setup
 
-#### 1. Prepare data
+#### 1. Download data from S3
 
-Place corpus files and indexes under `backend/data/`:
+Corpus, indexes, and config are stored in Amazon S3. Run the setup script:
+
+```bash
+./scripts/setup-data.sh
+```
+
+This downloads into `backend/data/`:
 
 ```
 backend/data/
@@ -93,24 +99,22 @@ backend/data/
     finance/                 ← SEC 10-K filing .md files
     novel/                   ← NovelQA .txt files
   index/
-    finance/                 ← tantivy index (build output)
-    novel/                   ← tantivy index (build output)
+    finance/                 ← tantivy index
+    novel/                   ← tantivy index
 ```
 
-Corpus files (.md, .txt) are stored in Amazon S3 and not included in this repository.
+Requires AWS CLI configured with access to `s3://ne-rag-dataset`.
 
-#### 2. Build indexes
+#### 2. (Optional) Rebuild indexes
 
-Use the [agentmaker](https://github.com/brekkylab/agentmaker) `knowledge-agent` CLI:
+If you need to re-index from scratch, use the [agentmaker](https://github.com/brekkylab/agentmaker) `knowledge-agent` CLI:
 
 ```bash
-# Finance
 cargo run -p knowledge-agent -- \
   --index-dir ./backend/data/index/finance \
   --reindex --index-only \
   --target-paths ./backend/data/corpus/finance
 
-# Novel
 cargo run -p knowledge-agent -- \
   --index-dir ./backend/data/index/novel \
   --reindex --index-only \
@@ -119,7 +123,7 @@ cargo run -p knowledge-agent -- \
 
 #### 3. Configure knowledge bases
 
-Edit `backend/data/knowledge_agents.json` to match your corpus/index layout. Paths are resolved relative to the JSON file location.
+`backend/data/knowledge_agents.json` is downloaded by the setup script. Paths are resolved relative to the JSON file location.
 
 Override the config path via environment variable:
 
