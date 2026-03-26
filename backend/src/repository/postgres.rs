@@ -1,7 +1,7 @@
 use async_trait::async_trait;
 use uuid::Uuid;
 
-use crate::models::{Agent, MessageRole, ProviderProfile, Session};
+use crate::models::{Agent, Knowledge, MessageRole, ProviderProfile, Session, Source, SourceType};
 use crate::repository::{Repository, RepositoryResult};
 use ailoy::{AgentProvider, AgentSpec};
 
@@ -121,6 +121,63 @@ impl Repository for PostgresRepository {
         _role: MessageRole,
         _content: String,
     ) -> RepositoryResult<Option<Session>> {
+        todo!("postgres implementation")
+    }
+
+    // --- Source ---
+
+    async fn create_source(
+        &self,
+        _name: String,
+        _source_type: SourceType,
+        _file_path: Option<String>,
+        _size: i64,
+    ) -> RepositoryResult<Source> {
+        todo!("postgres implementation")
+    }
+
+    async fn list_sources(&self) -> RepositoryResult<Vec<Source>> {
+        todo!("postgres implementation")
+    }
+
+    async fn get_source(&self, _id: Uuid) -> RepositoryResult<Option<Source>> {
+        todo!("postgres implementation")
+    }
+
+    async fn delete_source(&self, _id: Uuid) -> RepositoryResult<bool> {
+        todo!("postgres implementation")
+    }
+
+    // --- Knowledge ---
+
+    async fn create_knowledge(
+        &self,
+        _name: String,
+        _description: String,
+        _source_ids: Vec<Uuid>,
+    ) -> RepositoryResult<Knowledge> {
+        todo!("postgres implementation")
+    }
+
+    async fn list_knowledges(&self) -> RepositoryResult<Vec<Knowledge>> {
+        todo!("postgres implementation")
+    }
+
+    async fn get_knowledge(&self, _id: Uuid) -> RepositoryResult<Option<Knowledge>> {
+        todo!("postgres implementation")
+    }
+
+    async fn update_knowledge(
+        &self,
+        _id: Uuid,
+        _name: String,
+        _description: String,
+        _source_ids: Vec<Uuid>,
+    ) -> RepositoryResult<Option<Knowledge>> {
+        todo!("postgres implementation")
+    }
+
+    async fn delete_knowledge(&self, _id: Uuid) -> RepositoryResult<bool> {
         todo!("postgres implementation")
     }
 }

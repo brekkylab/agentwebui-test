@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { MessageSquare, FileText, BookOpen, Settings } from "lucide-react";
+import { MessageSquare, Database, BookOpen, Settings } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
@@ -11,7 +11,7 @@ import { SessionDropdown } from "@/components/chat/session-dropdown";
 
 const NAV_ITEMS = [
   { href: "/chat", label: "Chat", icon: MessageSquare, hasDropdown: true },
-  { href: "/documents", label: "Documents", icon: FileText, hasDropdown: false },
+  { href: "/sources", label: "Sources", icon: Database, hasDropdown: false },
   { href: "/knowledge", label: "Knowledge", icon: BookOpen, hasDropdown: false },
 ] as const;
 

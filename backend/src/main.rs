@@ -30,6 +30,7 @@ async fn main() -> std::io::Result<()> {
         App::new()
             .wrap(cors)
             .app_data(app_state.clone())
+            .app_data(web::PayloadConfig::default().limit(50 * 1024 * 1024))
             .service(
                 SwaggerUi::new("/swagger-ui/{_:.*}")
                     .url("/api-docs/openapi.json", handlers::ApiDoc::openapi()),

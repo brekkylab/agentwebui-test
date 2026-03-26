@@ -6,7 +6,9 @@ use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions, SqliteRow};
 use sqlx::{Row, SqlitePool};
 use uuid::Uuid;
 
-use crate::models::{Agent, MessageRole, ProviderProfile, Session, SessionMessage};
+use crate::models::{
+    Agent, Knowledge, MessageRole, ProviderProfile, Session, SessionMessage, Source, SourceType,
+};
 use crate::repository::{Repository, RepositoryError, RepositoryResult};
 use ailoy::{AgentProvider, AgentSpec};
 
@@ -112,6 +114,62 @@ impl SqliteRepository {
         .execute(&self.pool)
         .await?;
 
+        // --- Sources ---
+        sqlx::query(
+            r#"
+            CREATE TABLE IF NOT EXISTS sources (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                source_type TEXT NOT NULL DEFAULT 'local_file',
+                file_path TEXT,
+                size INTEGER NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+            "#,
+        )
+        .execute(&self.pool)
+        .await?;
+
+        sqlx::query("CREATE INDEX IF NOT EXISTS idx_sources_created_at ON sources(created_at);")
+            .execute(&self.pool)
+            .await?;
+
+        // --- Knowledges ---
+        sqlx::query(
+            r#"
+            CREATE TABLE IF NOT EXISTS knowledges (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                description TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+            "#,
+        )
+        .execute(&self.pool)
+        .await?;
+
+        sqlx::query(
+            r#"
+            CREATE TABLE IF NOT EXISTS knowledge_sources (
+                knowledge_id TEXT NOT NULL,
+                source_id TEXT NOT NULL,
+                PRIMARY KEY (knowledge_id, source_id),
+                FOREIGN KEY(knowledge_id) REFERENCES knowledges(id) ON DELETE CASCADE,
+                FOREIGN KEY(source_id) REFERENCES sources(id) ON DELETE CASCADE
+            );
+            "#,
+        )
+        .execute(&self.pool)
+        .await?;
+
+        sqlx::query(
+            "CREATE INDEX IF NOT EXISTS idx_knowledge_sources_source_id ON knowledge_sources(source_id);",
+        )
+        .execute(&self.pool)
+        .await?;
+
         Ok(())
     }
 
@@ -190,6 +248,50 @@ impl SqliteRepository {
             created_at,
             updated_at,
         })
+    }
+
+    fn source_type_from_string(s: &str) -> RepositoryResult<SourceType> {
+        match s {
+            "local_file" => Ok(SourceType::LocalFile),
+            _ => Err(RepositoryError::InvalidData(format!(
+                "invalid source type `{s}`"
+            ))),
+        }
+    }
+
+    fn row_to_source(row: &SqliteRow) -> RepositoryResult<Source> {
+        let id = Self::parse_uuid(row.get::<String, _>("id"), "sources.id")?;
+        let source_type = Self::source_type_from_string(&row.get::<String, _>("source_type"))?;
+        let created_at =
+            Self::parse_timestamp(row.get::<String, _>("created_at"), "sources.created_at")?;
+        let updated_at =
+            Self::parse_timestamp(row.get::<String, _>("updated_at"), "sources.updated_at")?;
+
+        Ok(Source {
+            id,
+            name: row.get::<String, _>("name"),
+            source_type,
+            file_path: row.get::<Option<String>, _>("file_path"),
+            size: row.get::<i64, _>("size"),
+            created_at,
+            updated_at,
+        })
+    }
+
+    async fn load_source_ids_for_knowledge(
+        &self,
+        knowledge_id: Uuid,
+    ) -> RepositoryResult<Vec<Uuid>> {
+        let rows = sqlx::query(
+            "SELECT source_id FROM knowledge_sources WHERE knowledge_id = ?;",
+        )
+        .bind(knowledge_id.to_string())
+        .fetch_all(&self.pool)
+        .await?;
+
+        rows.iter()
+            .map(|row| Self::parse_uuid(row.get::<String, _>("source_id"), "knowledge_sources.source_id"))
+            .collect()
     }
 
     fn row_to_session_without_messages(row: &SqliteRow) -> RepositoryResult<Session> {
@@ -704,6 +806,254 @@ impl Repository for SqliteRepository {
 
         tx.commit().await?;
         self.load_session_by_id(session_id).await
+    }
+
+    // --- Source ---
+
+    async fn create_source(
+        &self,
+        name: String,
+        source_type: SourceType,
+        file_path: Option<String>,
+        size: i64,
+    ) -> RepositoryResult<Source> {
+        let now = Self::now_string();
+        let id = Uuid::new_v4();
+        let source_type_str = match source_type {
+            SourceType::LocalFile => "local_file",
+        };
+
+        sqlx::query(
+            r#"
+            INSERT INTO sources (id, name, source_type, file_path, size, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?);
+            "#,
+        )
+        .bind(id.to_string())
+        .bind(&name)
+        .bind(source_type_str)
+        .bind(&file_path)
+        .bind(size)
+        .bind(&now)
+        .bind(&now)
+        .execute(&self.pool)
+        .await?;
+
+        Ok(Source {
+            id,
+            name,
+            source_type,
+            file_path,
+            size,
+            created_at: Self::parse_timestamp(now.clone(), "sources.created_at")?,
+            updated_at: Self::parse_timestamp(now, "sources.updated_at")?,
+        })
+    }
+
+    async fn list_sources(&self) -> RepositoryResult<Vec<Source>> {
+        let rows = sqlx::query(
+            r#"
+            SELECT id, name, source_type, file_path, size, created_at, updated_at
+            FROM sources
+            ORDER BY created_at DESC;
+            "#,
+        )
+        .fetch_all(&self.pool)
+        .await?;
+
+        rows.iter().map(Self::row_to_source).collect()
+    }
+
+    async fn get_source(&self, id: Uuid) -> RepositoryResult<Option<Source>> {
+        let row = sqlx::query(
+            r#"
+            SELECT id, name, source_type, file_path, size, created_at, updated_at
+            FROM sources
+            WHERE id = ?;
+            "#,
+        )
+        .bind(id.to_string())
+        .fetch_optional(&self.pool)
+        .await?;
+
+        row.as_ref().map(Self::row_to_source).transpose()
+    }
+
+    async fn delete_source(&self, id: Uuid) -> RepositoryResult<bool> {
+        let result = sqlx::query("DELETE FROM sources WHERE id = ?;")
+            .bind(id.to_string())
+            .execute(&self.pool)
+            .await?;
+
+        Ok(result.rows_affected() > 0)
+    }
+
+    // --- Knowledge ---
+
+    async fn create_knowledge(
+        &self,
+        name: String,
+        description: String,
+        source_ids: Vec<Uuid>,
+    ) -> RepositoryResult<Knowledge> {
+        let now = Self::now_string();
+        let id = Uuid::new_v4();
+
+        sqlx::query(
+            r#"
+            INSERT INTO knowledges (id, name, description, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?);
+            "#,
+        )
+        .bind(id.to_string())
+        .bind(&name)
+        .bind(&description)
+        .bind(&now)
+        .bind(&now)
+        .execute(&self.pool)
+        .await?;
+
+        for source_id in &source_ids {
+            sqlx::query(
+                "INSERT INTO knowledge_sources (knowledge_id, source_id) VALUES (?, ?);",
+            )
+            .bind(id.to_string())
+            .bind(source_id.to_string())
+            .execute(&self.pool)
+            .await?;
+        }
+
+        Ok(Knowledge {
+            id,
+            name,
+            description,
+            source_ids,
+            created_at: Self::parse_timestamp(now.clone(), "knowledges.created_at")?,
+            updated_at: Self::parse_timestamp(now, "knowledges.updated_at")?,
+        })
+    }
+
+    async fn list_knowledges(&self) -> RepositoryResult<Vec<Knowledge>> {
+        let rows = sqlx::query(
+            r#"
+            SELECT id, name, description, created_at, updated_at
+            FROM knowledges
+            ORDER BY created_at DESC;
+            "#,
+        )
+        .fetch_all(&self.pool)
+        .await?;
+
+        let mut knowledges = Vec::with_capacity(rows.len());
+        for row in &rows {
+            let id = Self::parse_uuid(row.get::<String, _>("id"), "knowledges.id")?;
+            let source_ids = self.load_source_ids_for_knowledge(id).await?;
+            let name = row.get::<String, _>("name");
+            let description = row.get::<String, _>("description");
+            let created_at =
+                Self::parse_timestamp(row.get::<String, _>("created_at"), "knowledges.created_at")?;
+            let updated_at =
+                Self::parse_timestamp(row.get::<String, _>("updated_at"), "knowledges.updated_at")?;
+            knowledges.push(Knowledge {
+                id,
+                name,
+                description,
+                source_ids,
+                created_at,
+                updated_at,
+            });
+        }
+
+        Ok(knowledges)
+    }
+
+    async fn get_knowledge(&self, id: Uuid) -> RepositoryResult<Option<Knowledge>> {
+        let row = sqlx::query(
+            r#"
+            SELECT id, name, description, created_at, updated_at
+            FROM knowledges
+            WHERE id = ?;
+            "#,
+        )
+        .bind(id.to_string())
+        .fetch_optional(&self.pool)
+        .await?;
+
+        let Some(row) = row else {
+            return Ok(None);
+        };
+
+        let source_ids = self.load_source_ids_for_knowledge(id).await?;
+        let name = row.get::<String, _>("name");
+        let description = row.get::<String, _>("description");
+        let created_at =
+            Self::parse_timestamp(row.get::<String, _>("created_at"), "knowledges.created_at")?;
+        let updated_at =
+            Self::parse_timestamp(row.get::<String, _>("updated_at"), "knowledges.updated_at")?;
+
+        Ok(Some(Knowledge {
+            id,
+            name,
+            description,
+            source_ids,
+            created_at,
+            updated_at,
+        }))
+    }
+
+    async fn update_knowledge(
+        &self,
+        id: Uuid,
+        name: String,
+        description: String,
+        source_ids: Vec<Uuid>,
+    ) -> RepositoryResult<Option<Knowledge>> {
+        let now = Self::now_string();
+
+        let result = sqlx::query(
+            r#"
+            UPDATE knowledges
+            SET name = ?, description = ?, updated_at = ?
+            WHERE id = ?;
+            "#,
+        )
+        .bind(&name)
+        .bind(&description)
+        .bind(&now)
+        .bind(id.to_string())
+        .execute(&self.pool)
+        .await?;
+
+        if result.rows_affected() == 0 {
+            return Ok(None);
+        }
+
+        // Replace knowledge_sources entirely
+        sqlx::query("DELETE FROM knowledge_sources WHERE knowledge_id = ?;")
+            .bind(id.to_string())
+            .execute(&self.pool)
+            .await?;
+
+        for source_id in &source_ids {
+            sqlx::query(
+                "INSERT INTO knowledge_sources (knowledge_id, source_id) VALUES (?, ?);",
+            )
+            .bind(id.to_string())
+            .bind(source_id.to_string())
+            .execute(&self.pool)
+            .await?;
+        }
+
+        self.get_knowledge(id).await
+    }
+
+    async fn delete_knowledge(&self, id: Uuid) -> RepositoryResult<bool> {
+        let result = sqlx::query("DELETE FROM knowledges WHERE id = ?;")
+            .bind(id.to_string())
+            .execute(&self.pool)
+            .await?;
+
+        Ok(result.rows_affected() > 0)
     }
 }
 

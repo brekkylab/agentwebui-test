@@ -13,28 +13,30 @@ import {
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
-import { useAppStore } from "@/lib/store";
+import { createKnowledge } from "@/lib/api";
 
 export default function KnowledgePage() {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [isCreateOpen, setIsCreateOpen] = useState(false);
   const [newName, setNewName] = useState("");
   const [newDescription, setNewDescription] = useState("");
-  const addKnowledge = useAppStore((s) => s.addKnowledge);
+  const [refreshKey, setRefreshKey] = useState(0);
 
-  const handleCreate = () => {
+  const handleCreate = async () => {
     if (!newName.trim()) return;
-    const id = `kn-${Date.now()}`;
-    addKnowledge({
-      id,
-      name: newName.trim(),
-      description: newDescription.trim(),
-      documentIds: [],
-    });
-    setNewName("");
-    setNewDescription("");
-    setIsCreateOpen(false);
-    setEditingId(id);
+    try {
+      const created = await createKnowledge({
+        name: newName.trim(),
+        description: newDescription.trim(),
+        source_ids: [],
+      });
+      setNewName("");
+      setNewDescription("");
+      setIsCreateOpen(false);
+      setEditingId(created.id);
+    } catch (error) {
+      console.error("Failed to create knowledge:", error);
+    }
   };
 
   if (editingId) {
@@ -42,7 +44,10 @@ export default function KnowledgePage() {
       <div className="p-6 max-w-5xl mx-auto">
         <KnowledgeEditor
           knowledgeId={editingId}
-          onBack={() => setEditingId(null)}
+          onBack={() => {
+            setEditingId(null);
+            setRefreshKey((k) => k + 1);
+          }}
         />
       </div>
     );
@@ -53,6 +58,7 @@ export default function KnowledgePage() {
       <KnowledgeGrid
         onSelect={setEditingId}
         onCreate={() => setIsCreateOpen(true)}
+        refreshKey={refreshKey}
       />
 
       <Dialog open={isCreateOpen} onOpenChange={setIsCreateOpen}>

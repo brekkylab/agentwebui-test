@@ -1,18 +1,24 @@
-export interface Document {
+// --- Backend API Source/Knowledge Types ---
+
+export interface ApiSource {
   id: string;
   name: string;
-  size: number; // bytes
-  uploadedAt: Date;
+  source_type: string;
+  size: number;
+  created_at: string;
+  updated_at: string;
 }
 
-export interface Knowledge {
+export interface ApiKnowledge {
   id: string;
   name: string;
   description: string;
-  documentIds: string[];
+  source_ids: string[];
+  created_at: string;
+  updated_at: string;
 }
 
-export interface SessionDocument {
+export interface SessionSource {
   name: string;
   size: number;
 }
@@ -28,7 +34,7 @@ export interface ChatSession {
   title: string;
   messages: ChatMessage[];
   knowledgeIds: string[];
-  sessionDocuments: SessionDocument[];
+  sessionSources: SessionSource[];
 }
 
 // --- Backend API Response Types ---

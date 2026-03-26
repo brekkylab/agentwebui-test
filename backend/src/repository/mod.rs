@@ -7,7 +7,7 @@ use async_trait::async_trait;
 use thiserror::Error;
 use uuid::Uuid;
 
-use crate::models::{Agent, MessageRole, ProviderProfile, Session};
+use crate::models::{Agent, Knowledge, MessageRole, ProviderProfile, Session, Source, SourceType};
 use ailoy::{AgentProvider, AgentSpec};
 
 pub use postgres::PostgresRepository;
@@ -93,6 +93,36 @@ pub trait Repository: Send + Sync {
         role: MessageRole,
         content: String,
     ) -> RepositoryResult<Option<Session>>;
+
+    // --- Source ---
+    async fn create_source(
+        &self,
+        name: String,
+        source_type: SourceType,
+        file_path: Option<String>,
+        size: i64,
+    ) -> RepositoryResult<Source>;
+    async fn list_sources(&self) -> RepositoryResult<Vec<Source>>;
+    async fn get_source(&self, id: Uuid) -> RepositoryResult<Option<Source>>;
+    async fn delete_source(&self, id: Uuid) -> RepositoryResult<bool>;
+
+    // --- Knowledge ---
+    async fn create_knowledge(
+        &self,
+        name: String,
+        description: String,
+        source_ids: Vec<Uuid>,
+    ) -> RepositoryResult<Knowledge>;
+    async fn list_knowledges(&self) -> RepositoryResult<Vec<Knowledge>>;
+    async fn get_knowledge(&self, id: Uuid) -> RepositoryResult<Option<Knowledge>>;
+    async fn update_knowledge(
+        &self,
+        id: Uuid,
+        name: String,
+        description: String,
+        source_ids: Vec<Uuid>,
+    ) -> RepositoryResult<Option<Knowledge>>;
+    async fn delete_knowledge(&self, id: Uuid) -> RepositoryResult<bool>;
 }
 
 pub async fn create_repository_from_env() -> RepositoryResult<Arc<dyn Repository>> {

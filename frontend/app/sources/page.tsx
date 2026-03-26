@@ -1,16 +1,18 @@
 "use client";
 
 import { useCallback, useState } from "react";
-import { DocumentList } from "@/components/documents/document-list";
+import { SourceList } from "@/components/sources/source-list";
 import {
   UploadButton,
   DragOverlay,
   useFileUpload,
-} from "@/components/documents/upload-zone";
+} from "@/components/sources/upload-zone";
 
-export default function DocumentsPage() {
+export default function SourcesPage() {
   const [isDragging, setIsDragging] = useState(false);
-  const { handleFiles } = useFileUpload();
+  const [refreshKey, setRefreshKey] = useState(0);
+  const onUploaded = useCallback(() => setRefreshKey((k) => k + 1), []);
+  const { handleFiles } = useFileUpload(onUploaded);
 
   const onDragOver = useCallback((e: React.DragEvent) => {
     e.preventDefault();
@@ -43,10 +45,10 @@ export default function DocumentsPage() {
       onDrop={onDrop}
     >
       <div className="flex items-center justify-between mb-6">
-        <h1 className="text-2xl font-bold">Documents</h1>
-        <UploadButton />
+        <h1 className="text-2xl font-bold">Sources</h1>
+        <UploadButton onUploaded={onUploaded} />
       </div>
-      <DocumentList />
+      <SourceList refreshKey={refreshKey} />
       <DragOverlay isDragging={isDragging} />
     </div>
   );

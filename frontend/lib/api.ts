@@ -3,6 +3,8 @@ import type {
   ApiAgent,
   ApiSession,
   ApiSessionMessage,
+  ApiSource,
+  ApiKnowledge,
 } from "./types";
 
 const API_BASE_URL =
@@ -39,7 +41,9 @@ async function fetchApi<T>(
       ...fetchOptions,
       signal: controller.signal,
       headers: {
-        "Content-Type": "application/json",
+        ...(fetchOptions?.body instanceof FormData
+          ? {}
+          : { "Content-Type": "application/json" }),
         ...fetchOptions?.headers,
       },
     });
@@ -164,4 +168,54 @@ export async function sendMessage(
       timeout: 60_000,
     },
   );
+}
+
+// --- Sources ---
+
+export async function getSources(): Promise<ApiSource[]> {
+  return fetchApi<ApiSource[]>("/sources");
+}
+
+export async function uploadSource(file: File): Promise<ApiSource> {
+  const formData = new FormData();
+  formData.append("file", file);
+  return fetchApi<ApiSource>("/sources", {
+    method: "POST",
+    body: formData,
+  });
+}
+
+export async function deleteSource(id: string): Promise<void> {
+  return fetchApi<void>(`/sources/${id}`, { method: "DELETE" });
+}
+
+// --- Knowledges ---
+
+export async function getKnowledges(): Promise<ApiKnowledge[]> {
+  return fetchApi<ApiKnowledge[]>("/knowledges");
+}
+
+export async function createKnowledge(data: {
+  name: string;
+  description: string;
+  source_ids?: string[];
+}): Promise<ApiKnowledge> {
+  return fetchApi<ApiKnowledge>("/knowledges", {
+    method: "POST",
+    body: JSON.stringify(data),
+  });
+}
+
+export async function updateKnowledge(
+  id: string,
+  data: { name: string; description: string; source_ids: string[] },
+): Promise<ApiKnowledge> {
+  return fetchApi<ApiKnowledge>(`/knowledges/${id}`, {
+    method: "PUT",
+    body: JSON.stringify(data),
+  });
+}
+
+export async function deleteKnowledge(id: string): Promise<void> {
+  return fetchApi<void>(`/knowledges/${id}`, { method: "DELETE" });
 }
