@@ -36,7 +36,7 @@ Thumbs.db
 *.swo
 *~
 
-# Backend data (SQLite DB — may contain API keys)
+# Backend data (downloaded via scripts/setup-data.sh)
 backend/data/
 
 # Claude Code / OMC / Plugin state

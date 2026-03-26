@@ -66,6 +66,110 @@ async fn main() -> anyhow::Result<()> {
 }
 ```
 
+## Knowledge Sub-Agent
+
+`ChatAgent` integrates a knowledge sub-agent via the `ask_knowledge` tool.
+When the LLM calls this tool, a **short-lived sub-agent** is spawned per invocation:
+
+```
+ChatAgent (parent, LLM)
+  └─ ask_knowledge(kb_id, question)
+       └─ knowledge sub-agent (create → ReAct search loop → drop)
+            └─ tantivy full-text search index
+```
+
+Each sub-agent is stateless — created, runs a single query, and immediately dropped.
+
+### Setup
+
+#### 1. Download data from S3
+
+Corpus, indexes, and config are stored in Amazon S3. Run the setup script:
+
+```bash
+./scripts/setup-data.sh
+```
+
+This downloads into `backend/data/`:
+
+```
+backend/data/
+  knowledge_agents.json      ← KB config
+  corpus/
+    finance/                 ← SEC 10-K filing .md files
+    novel/                   ← NovelQA .txt files
+  index/
+    finance/                 ← tantivy index
+    novel/                   ← tantivy index
+```
+
+Requires AWS CLI configured with access to `s3://ne-rag-dataset`.
+
+#### 2. (Optional) Rebuild indexes
+
+If you need to re-index from scratch, use the [agentmaker](https://github.com/brekkylab/agentmaker) `knowledge-agent` CLI:
+
+```bash
+cargo run -p knowledge-agent -- \
+  --index-dir ./backend/data/index/finance \
+  --reindex --index-only \
+  --target-paths ./backend/data/corpus/finance
+
+cargo run -p knowledge-agent -- \
+  --index-dir ./backend/data/index/novel \
+  --reindex --index-only \
+  --target-paths ./backend/data/corpus/novel
+```
+
+#### 3. Configure knowledge bases
+
+`backend/data/knowledge_agents.json` is downloaded by the setup script. Paths are resolved relative to the JSON file location.
+
+Override the config path via environment variable:
+
+```bash
+KNOWLEDGE_AGENTS_CONFIG=/path/to/knowledge_agents.json
+```
+
+#### 4. Private repo authentication
+
+`knowledge-agent` is in a private repo. `.cargo/config.toml` includes:
+
+```toml
+[net]
+git-fetch-with-cli = true
+```
+
+Ensure your local git has GitHub authentication (SSH key or credential helper).
+
+### Public API (Knowledge)
+
+- `ChatAgent::tool_call_log() -> &[ToolCallEntry]`
+  - Returns tool call/result pairs collected during `run_user_text()`
+  - `ToolCallEntry { tool: String, args: serde_json::Value, result: Option<serde_json::Value> }`
+  - Useful for verifying routing (e.g. which `kb_id` was selected)
+
+### Routing Tests
+
+Integration tests verify the LLM routes queries to the correct knowledge base:
+
+```bash
+# Unit tests only (no API call)
+cargo test
+
+# Routing integration tests (requires OPENAI_API_KEY + indexes)
+cargo test --test routing_test -- --ignored --nocapture
+```
+
+| Test | Query | Expected kb_id |
+|------|-------|---------------|
+| `routes_revenue_question_to_finance` | "What was Apple's total revenue in 2022?" | finance |
+| `routes_expense_question_to_finance` | "How much did Amazon spend on R&D in 2021?" | finance |
+| `routes_profit_question_to_finance` | "What was Microsoft's operating profit margin in 2020?" | finance |
+| `routes_character_question_to_novel` | "Who is the protagonist of Pride and Prejudice?" | novel |
+| `routes_theme_question_to_novel` | "What is the main theme of Anna Karenina?" | novel |
+| `routes_plot_question_to_novel` | "How does Wuthering Heights end?" | novel |
+
 ## Current Scope
 
 - Runtime creation and one-turn execution wrapper only

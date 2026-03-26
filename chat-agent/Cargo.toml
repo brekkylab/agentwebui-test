@@ -6,6 +6,10 @@ edition = "2024"
 [dependencies]
 ailoy = { git = "https://github.com/brekkylab/ailoy.git", rev = "55c472cb1f1450cc82cdc028e5450e2398d7418e" }
 anyhow = "1.0.100"
+futures = "0.3"
+knowledge-agent = { git = "https://github.com/brekkylab/agentmaker.git", rev = "c435115ee01ba3dccc2d48047c29a7e886743798" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
 thiserror = "2.0.17"
 url = { version = "2.5.7", features = ["serde"] }
 
