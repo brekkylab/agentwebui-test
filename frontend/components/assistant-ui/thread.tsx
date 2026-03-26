@@ -25,9 +25,9 @@ export const Thread: FC = () => {
           />
           <div className="min-h-8 grow" />
         </ThreadPrimitive.If>
-
-        <Composer />
       </ThreadPrimitive.Viewport>
+
+      <Composer />
     </ThreadPrimitive.Root>
   );
 };
@@ -51,7 +51,7 @@ export const ThreadWelcome: FC = () => {
 
 export const Composer: FC = () => {
   return (
-    <div className="sticky bottom-0 mx-auto flex w-full max-w-2xl flex-col gap-4 bg-background pb-4">
+    <div className="mx-auto flex w-full max-w-2xl flex-col gap-4 bg-background pb-4 px-4">
       <ComposerPrimitive.Root className="relative flex w-full flex-col rounded-2xl border border-input bg-background px-1 pt-2 shadow-sm transition-colors focus-within:border-ring focus-within:ring-2 focus-within:ring-ring/50">
         <ComposerPrimitive.Input
           placeholder="메시지를 입력하세요..."

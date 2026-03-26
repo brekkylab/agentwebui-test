@@ -73,7 +73,7 @@ export function KnowledgePanel({ onClose }: KnowledgePanelProps) {
   };
 
   return (
-    <div className="w-64 border-r bg-background flex flex-col">
+    <div className="w-64 flex flex-col">
       <div className="flex items-center justify-between p-3 border-b">
         <span className="font-semibold text-sm">Knowledge</span>
         <Button
@@ -86,7 +86,7 @@ export function KnowledgePanel({ onClose }: KnowledgePanelProps) {
         </Button>
       </div>
 
-      <div className="flex-1 overflow-y-auto p-3 space-y-3">
+      <div className="max-h-80 overflow-y-auto p-3 space-y-3">
         <label className="flex items-center gap-2 cursor-pointer">
           <Checkbox checked={allSelected} onCheckedChange={toggleAll} />
           <span className="text-sm font-medium">전체 문서 사용</span>
