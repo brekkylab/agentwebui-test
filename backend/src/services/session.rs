@@ -137,7 +137,8 @@ pub async fn send_message(
         return Err(SessionError::EmptyContent);
     }
 
-    let session = state
+    // Save the user/system message
+    state
         .repository
         .add_session_message(session_id, role.clone(), content.clone())
         .await?
@@ -148,6 +149,13 @@ pub async fn send_message(
             assistant_message: None,
         });
     }
+
+    // Load session once for runtime creation (without full message history reload per message)
+    let session = state
+        .repository
+        .get_session(session_id)
+        .await?
+        .ok_or(SessionError::NotFound)?;
 
     let runtime = state
         .get_or_create_runtime_for_session(&session)
@@ -174,17 +182,11 @@ pub async fn send_message(
         }
     };
 
-    let updated_session = state
+    // Save assistant message and return it directly (no full session reload)
+    let assistant_message = state
         .repository
         .add_session_message(session_id, MessageRole::Assistant, assistant_text)
-        .await?
-        .ok_or(SessionError::NotFound)?;
-
-    let assistant_message = updated_session
-        .messages
-        .last()
-        .cloned()
-        .filter(|m| matches!(m.role, MessageRole::Assistant));
+        .await?;
 
     Ok(AddSessionMessageResponse { assistant_message })
 }

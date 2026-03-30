@@ -9,7 +9,7 @@ use chrono::Utc;
 use thiserror::Error;
 use uuid::Uuid;
 
-use crate::models::{Agent, MessageRole, ProviderProfile, Session, Source, SourceType, Speedwagon, SpeedwagonIndexStatus};
+use crate::models::{Agent, MessageRole, ProviderProfile, Session, SessionMessage, Source, SourceType, Speedwagon, SpeedwagonIndexStatus};
 use ailoy::{AgentProvider, AgentSpec};
 
 pub use postgres::PostgresRepository;
@@ -93,7 +93,7 @@ pub trait Repository: Send + Sync {
         session_id: Uuid,
         role: MessageRole,
         content: String,
-    ) -> RepositoryResult<Option<Session>>;
+    ) -> RepositoryResult<Option<SessionMessage>>;
     async fn update_session_atomic(
         &self,
         id: Uuid,

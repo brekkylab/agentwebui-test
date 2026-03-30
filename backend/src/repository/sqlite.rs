@@ -894,7 +894,7 @@ impl Repository for SqliteRepository {
         session_id: Uuid,
         role: MessageRole,
         content: String,
-    ) -> RepositoryResult<Option<Session>> {
+    ) -> RepositoryResult<Option<SessionMessage>> {
         let mut tx = self.pool.begin().await?;
 
         let session_row = sqlx::query(
@@ -943,7 +943,9 @@ impl Repository for SqliteRepository {
         }
 
         tx.commit().await?;
-        self.load_session_by_id(session_id).await
+
+        let created_at = Self::parse_timestamp(now, "created_at")?;
+        Ok(Some(SessionMessage { role, content, created_at }))
     }
 
     async fn update_session_atomic(

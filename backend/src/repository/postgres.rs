@@ -2,7 +2,7 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use uuid::Uuid;
 
-use crate::models::{Agent, MessageRole, ProviderProfile, Session, Source, SourceType, Speedwagon, SpeedwagonIndexStatus};
+use crate::models::{Agent, MessageRole, ProviderProfile, Session, SessionMessage, Source, SourceType, Speedwagon, SpeedwagonIndexStatus};
 use crate::repository::{Repository, RepositoryResult};
 use ailoy::{AgentProvider, AgentSpec};
 
@@ -121,7 +121,7 @@ impl Repository for PostgresRepository {
         _session_id: Uuid,
         _role: MessageRole,
         _content: String,
-    ) -> RepositoryResult<Option<Session>> {
+    ) -> RepositoryResult<Option<SessionMessage>> {
         todo!("postgres implementation")
     }
 
