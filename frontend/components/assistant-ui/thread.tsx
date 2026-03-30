@@ -8,7 +8,7 @@ import {
   MessagePrimitive,
 } from "@assistant-ui/react";
 
-export const Thread: FC = () => {
+export const Thread: FC<{ composerLeft?: React.ReactNode }> = ({ composerLeft }) => {
   return (
     <ThreadPrimitive.Root className="flex h-full flex-col bg-background">
       <ThreadPrimitive.Viewport className="relative flex flex-1 flex-col overflow-y-auto px-4">
@@ -25,9 +25,9 @@ export const Thread: FC = () => {
           />
           <div className="min-h-8 grow" />
         </ThreadPrimitive.If>
-
-        <Composer />
       </ThreadPrimitive.Viewport>
+
+      <Composer composerLeft={composerLeft} />
     </ThreadPrimitive.Root>
   );
 };
@@ -49,9 +49,9 @@ export const ThreadWelcome: FC = () => {
   );
 };
 
-export const Composer: FC = () => {
+export const Composer: FC<{ composerLeft?: React.ReactNode }> = ({ composerLeft }) => {
   return (
-    <div className="sticky bottom-0 mx-auto flex w-full max-w-2xl flex-col gap-4 bg-background pb-4">
+    <div className="mx-auto flex w-full max-w-2xl flex-col gap-4 bg-background pb-4 px-4">
       <ComposerPrimitive.Root className="relative flex w-full flex-col rounded-2xl border border-input bg-background px-1 pt-2 shadow-sm transition-colors focus-within:border-ring focus-within:ring-2 focus-within:ring-ring/50">
         <ComposerPrimitive.Input
           placeholder="메시지를 입력하세요..."
@@ -59,8 +59,9 @@ export const Composer: FC = () => {
           rows={1}
           autoFocus
         />
-        <div className="mx-1 mb-2 flex items-center justify-end">
-          <ComposerPrimitive.Send className="inline-flex items-center justify-center h-8 w-8 rounded-full bg-primary text-primary-foreground hover:bg-primary/90">
+        <div className="mx-1 mb-2 flex items-center justify-between">
+          <div>{composerLeft}</div>
+          <ComposerPrimitive.Send aria-label="메시지 전송" className="inline-flex items-center justify-center h-8 w-8 rounded-full bg-primary text-primary-foreground hover:bg-primary/90">
             <ArrowUpIcon className="h-4 w-4" />
           </ComposerPrimitive.Send>
         </div>
