@@ -1158,10 +1158,31 @@ impl Repository for SqliteRepository {
         .fetch_all(&self.pool)
         .await?;
 
+        // Bulk-load all speedwagon_sources in a single query to avoid N+1
+        let source_rows = sqlx::query(
+            "SELECT speedwagon_id, source_id FROM speedwagon_sources;",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+
+        let mut source_map: std::collections::HashMap<Uuid, Vec<Uuid>> =
+            std::collections::HashMap::new();
+        for sr in &source_rows {
+            let sw_id = Self::parse_uuid(
+                sr.get::<String, _>("speedwagon_id"),
+                "speedwagon_sources.speedwagon_id",
+            )?;
+            let src_id = Self::parse_uuid(
+                sr.get::<String, _>("source_id"),
+                "speedwagon_sources.source_id",
+            )?;
+            source_map.entry(sw_id).or_default().push(src_id);
+        }
+
         let mut speedwagons = Vec::with_capacity(rows.len());
         for row in &rows {
             let mut sw = Self::row_to_speedwagon_without_sources(row)?;
-            sw.source_ids = self.load_source_ids_for_speedwagon(sw.id).await?;
+            sw.source_ids = source_map.remove(&sw.id).unwrap_or_default();
             speedwagons.push(sw);
         }
 
