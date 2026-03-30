@@ -10,7 +10,7 @@ import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
 import { ThemeToggle } from "./theme-toggle";
 import { SessionList } from "@/components/chat/session-list";
-import { getSpeedwagons, createSpeedwagon } from "@/lib/api";
+import { createSpeedwagon } from "@/lib/api";
 import type { ApiSpeedwagon } from "@/lib/types";
 import { useAppStore } from "@/lib/store";
 
@@ -31,23 +31,20 @@ function SpeedwagonStatusDot({ status }: { status: ApiSpeedwagon["index_status"]
 export function Sidebar() {
   const pathname = usePathname();
   const router = useRouter();
-  const [speedwagons, setSpeedwagons] = useState<ApiSpeedwagon[]>([]);
+  const speedwagons = useAppStore((s) => s.speedwagons);
+  const fetchSpeedwagons = useAppStore((s) => s.fetchSpeedwagons);
   const [creating, setCreating] = useState(false);
   const [speedwagonsOpen, setSpeedwagonsOpen] = useState(true);
-  const speedwagonListVersion = useAppStore((s) => s.speedwagonListVersion);
 
   useEffect(() => {
-    getSpeedwagons()
-      .then(setSpeedwagons)
-      .catch(() => {});
-  }, [speedwagonListVersion]);
+    fetchSpeedwagons();
+  }, [fetchSpeedwagons]);
 
   const handleCreateSpeedwagon = async () => {
     setCreating(true);
     try {
       const sw = await createSpeedwagon({ name: "새 Speedwagon", description: "" });
-      setSpeedwagons((prev) => [...prev, sw]);
-      useAppStore.getState().bumpSpeedwagonListVersion();
+      await fetchSpeedwagons();
       router.push(`/speedwagons/${sw.id}`);
     } catch {
       // ignore

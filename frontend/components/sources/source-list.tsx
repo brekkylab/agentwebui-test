@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect } from "react";
 import { FileText, Trash2, ChevronDown, ChevronRight } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -12,8 +12,8 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { getSources, getSpeedwagons, deleteSource } from "@/lib/api";
-import type { ApiSource, ApiSpeedwagon } from "@/lib/types";
+import { deleteSource } from "@/lib/api";
+import { useAppStore } from "@/lib/store";
 
 function formatFileSize(bytes: number): string {
   if (bytes < 1024) return bytes + " B";
@@ -30,27 +30,17 @@ function formatDate(dateStr: string): string {
 }
 
 export function SourceList({ refreshKey }: { refreshKey?: number }) {
-  const [sources, setSources] = useState<ApiSource[]>([]);
-  const [speedwagons, setSpeedwagons] = useState<ApiSpeedwagon[]>([]);
+  const sources = useAppStore((s) => s.sources);
+  const speedwagons = useAppStore((s) => s.speedwagons);
+  const fetchSources = useAppStore((s) => s.fetchSources);
+  const fetchSpeedwagons = useAppStore((s) => s.fetchSpeedwagons);
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [deleteTargetId, setDeleteTargetId] = useState<string | null>(null);
 
-  const fetchData = useCallback(async () => {
-    try {
-      const [srcData, swData] = await Promise.all([
-        getSources(),
-        getSpeedwagons(),
-      ]);
-      setSources(srcData);
-      setSpeedwagons(swData);
-    } catch (error) {
-      console.error("Failed to load sources:", error);
-    }
-  }, []);
-
   useEffect(() => {
-    fetchData();
-  }, [fetchData, refreshKey]);
+    fetchSources();
+    fetchSpeedwagons();
+  }, [fetchSources, fetchSpeedwagons, refreshKey]);
 
   const getSpeedwagonsForSource = (sourceId: string) =>
     speedwagons.filter((sw) => sw.source_ids.includes(sourceId));
@@ -60,7 +50,8 @@ export function SourceList({ refreshKey }: { refreshKey?: number }) {
       await deleteSource(id);
       setDeleteTargetId(null);
       setExpandedId(null);
-      fetchData();
+      fetchSources();
+      fetchSpeedwagons();
     } catch (error) {
       console.error("Failed to delete source:", error);
     }

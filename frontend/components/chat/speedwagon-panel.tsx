@@ -6,8 +6,8 @@ import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Separator } from "@/components/ui/separator";
 import { useAppStore } from "@/lib/store";
-import { getSpeedwagons, getSources, updateSession } from "@/lib/api";
-import type { ApiSpeedwagon, ApiSource } from "@/lib/types";
+import { updateSession } from "@/lib/api";
+import type { ApiSpeedwagon } from "@/lib/types";
 
 interface SpeedwagonPanelProps {
   onClose: () => void;
@@ -22,21 +22,19 @@ export function SpeedwagonPanel({
   initialSpeedwagonIds,
   initialSourceIds,
 }: SpeedwagonPanelProps) {
-  const [speedwagons, setSpeedwagons] = useState<ApiSpeedwagon[]>([]);
-  const [sources, setSources] = useState<ApiSource[]>([]);
+  const speedwagons = useAppStore((s) => s.speedwagons);
+  const sources = useAppStore((s) => s.sources);
+  const fetchSpeedwagons = useAppStore((s) => s.fetchSpeedwagons);
+  const fetchSources = useAppStore((s) => s.fetchSources);
   const [selectedSpeedwagonIds, setSelectedSpeedwagonIds] = useState<string[]>(initialSpeedwagonIds);
   const [selectedSourceIds, setSelectedSourceIds] = useState<string[]>(initialSourceIds);
   const [saving, setSaving] = useState(false);
   const bumpSessionListVersion = useAppStore((s) => s.bumpSessionListVersion);
 
   useEffect(() => {
-    Promise.all([getSpeedwagons(), getSources()])
-      .then(([swData, srcData]) => {
-        setSpeedwagons(swData);
-        setSources(srcData);
-      })
-      .catch((err) => console.error("Failed to load speedwagons/sources:", err));
-  }, []);
+    fetchSpeedwagons();
+    fetchSources();
+  }, [fetchSpeedwagons, fetchSources]);
 
   const toggleSpeedwagon = async (id: string) => {
     const updated = selectedSpeedwagonIds.includes(id)

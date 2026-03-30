@@ -9,20 +9,19 @@ import {
   createAgent,
   createSession,
   sendMessage,
-  getSpeedwagons,
   ApiError,
 } from "@/lib/api";
-import type { ApiSpeedwagon } from "@/lib/types";
 
 export function NewChatWelcome() {
   const [message, setMessage] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [speedwagons, setSpeedwagons] = useState<ApiSpeedwagon[]>([]);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   // loading state와 별도로 ref로 중복 방지 — React 비동기 state 업데이트 사이의 race condition 방어
   const creatingRef = useRef(false);
 
+  const speedwagons = useAppStore((s) => s.speedwagons);
+  const fetchSpeedwagons = useAppStore((s) => s.fetchSpeedwagons);
   const selectedProvider = useAppStore((s) => s.selectedProvider);
   const selectedModel = useAppStore((s) => s.selectedModel);
   const selectedProfileId = useAppStore((s) => s.selectedProfileId);
@@ -34,13 +33,8 @@ export function NewChatWelcome() {
 
   useEffect(() => {
     textareaRef.current?.focus();
-  }, []);
-
-  useEffect(() => {
-    getSpeedwagons()
-      .then((data) => setSpeedwagons(data))
-      .catch(() => {});
-  }, []);
+    fetchSpeedwagons();
+  }, [fetchSpeedwagons]);
 
   const handleSubmit = async () => {
     if (!message.trim() || !selectedModel || !selectedProfileId) return;

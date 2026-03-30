@@ -8,9 +8,8 @@ import {
   updateSpeedwagon,
   deleteSpeedwagon,
   indexSpeedwagon,
-  getSources,
 } from "@/lib/api";
-import type { ApiSpeedwagon, ApiSource } from "@/lib/types";
+import type { ApiSpeedwagon } from "@/lib/types";
 import { PROVIDER_MODELS } from "@/lib/constants";
 import { useAppStore } from "@/lib/store";
 import { Button } from "@/components/ui/button";
@@ -86,7 +85,9 @@ function IndexStatusBadge({ sw }: { sw: ApiSpeedwagon }) {
 export function SpeedwagonDetail({ id }: Props) {
   const router = useRouter();
   const [sw, setSw] = useState<ApiSpeedwagon | null>(null);
-  const [sources, setSources] = useState<ApiSource[]>([]);
+  const sources = useAppStore((s) => s.sources);
+  const fetchSources = useAppStore((s) => s.fetchSources);
+  const fetchSpeedwagons = useAppStore((s) => s.fetchSpeedwagons);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [indexing, setIndexing] = useState(false);
@@ -108,12 +109,11 @@ export function SpeedwagonDetail({ id }: Props) {
 
   const load = useCallback(async () => {
     try {
-      const [swData, srcData] = await Promise.all([
+      const [swData] = await Promise.all([
         getSpeedwagon(id),
-        getSources(),
+        fetchSources(),
       ]);
       setSw(swData);
-      setSources(srcData);
       setName(swData.name);
       setDescription(swData.description);
       setInstruction(swData.instruction ?? "");
@@ -127,7 +127,7 @@ export function SpeedwagonDetail({ id }: Props) {
     } finally {
       setLoading(false);
     }
-  }, [id]);
+  }, [id, fetchSources]);
 
   useEffect(() => {
     load();
@@ -145,7 +145,7 @@ export function SpeedwagonDetail({ id }: Props) {
             if (updated.index_status === "indexed") {
               lastBuiltSourceIds.current = updated.source_ids;
             }
-            useAppStore.getState().bumpSpeedwagonListVersion();
+            fetchSpeedwagons();
           }
         } catch {
           // ignore poll errors
@@ -155,7 +155,7 @@ export function SpeedwagonDetail({ id }: Props) {
     return () => {
       if (pollRef.current) clearInterval(pollRef.current);
     };
-  }, [id, sw?.index_status]);
+  }, [id, sw?.index_status, fetchSpeedwagons]);
 
   // Debounced save
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -180,7 +180,7 @@ export function SpeedwagonDetail({ id }: Props) {
             source_ids: patch.sourceIds,
           });
           setSw(updated);
-          useAppStore.getState().bumpSpeedwagonListVersion();
+          fetchSpeedwagons();
         } catch {
           // ignore save errors silently
         } finally {
@@ -188,7 +188,7 @@ export function SpeedwagonDetail({ id }: Props) {
         }
       }, 800);
     },
-    [id],
+    [id, fetchSpeedwagons],
   );
 
   const handleNameChange = (v: string) => {
@@ -225,7 +225,7 @@ export function SpeedwagonDetail({ id }: Props) {
       await indexSpeedwagon(id);
       // Optimistically set indexing status
       setSw((prev) => prev ? { ...prev, index_status: "indexing", index_started_at: new Date().toISOString() } : prev);
-      useAppStore.getState().bumpSpeedwagonListVersion();
+      fetchSpeedwagons();
     } catch (e) {
       setError(e instanceof Error ? e.message : "인덱싱 실패");
     } finally {
@@ -237,7 +237,7 @@ export function SpeedwagonDetail({ id }: Props) {
     setDeleting(true);
     try {
       await deleteSpeedwagon(id);
-      useAppStore.getState().bumpSpeedwagonListVersion();
+      fetchSpeedwagons();
       router.push("/sources");
     } catch (e) {
       setError(e instanceof Error ? e.message : "Delete failed");

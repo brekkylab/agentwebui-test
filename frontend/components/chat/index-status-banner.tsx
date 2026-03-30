@@ -3,6 +3,7 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { X, Loader2, CheckCircle } from "lucide-react";
 import { getSpeedwagons } from "@/lib/api";
+import { useAppStore } from "@/lib/store";
 
 interface IndexStatusBannerProps {
   sessionSpeedwagonIds: string[];
@@ -46,13 +47,14 @@ export function IndexStatusBanner({ sessionSpeedwagonIds }: IndexStatusBannerPro
       prevIndexingRef.current = new Set(nowIndexingIds);
 
       if (justFinished.length > 0) {
-        // indexing → indexed transition detected: show success message
+        // indexing → indexed transition detected: show success message + refresh global cache
         const finishedNames = justFinished
           .map((id) => relevant.find((sw) => sw.id === id)?.name)
           .filter(Boolean) as string[];
 
         setBanner({ type: "success", names: finishedNames });
         setDismissed(false);
+        useAppStore.getState().fetchSpeedwagons();
 
         if (successTimerRef.current) clearTimeout(successTimerRef.current);
         successTimerRef.current = setTimeout(() => {

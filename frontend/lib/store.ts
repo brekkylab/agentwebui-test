@@ -1,22 +1,28 @@
 import { create } from "zustand";
 import type { ProviderName } from "./constants";
+import type { ApiSpeedwagon, ApiSource } from "./types";
+import { getSpeedwagons as apiGetSpeedwagons, getSources as apiGetSources } from "./api";
 
 // ============================================================
 // Zustand State Boundary
 // ============================================================
-// Backend (API)       | Zustand (UI state)
-// --------------------|---------------------------
+// Backend (API)       | Zustand (UI state + read-only list cache)
+// --------------------|------------------------------------------
 // Provider Profiles   | —
 // Agents              | —
 // Sessions list       | —
 // Session messages    | —
-// Sources             | —
-// Speedwagons         | —
+// Sources             | sources (캐시)
+// Speedwagons         | speedwagons (캐시)
 // Session speedwagon/source relationships | —
 // —                   | activeSessionId
 // —                   | selectedProvider / selectedModel (pending session용)
 // —                   | pendingSpeedwagonIds (pending session용)
 // ============================================================
+
+// Promise dedup: 동시 호출 시 동일 Promise 재사용
+let speedwagonsFetchPromise: Promise<void> | null = null;
+let sourcesFetchPromise: Promise<void> | null = null;
 
 interface AppState {
   // Active session (UI state)
@@ -24,8 +30,16 @@ interface AppState {
   setActiveSession: (id: string | null) => void;
   sessionListVersion: number;
   bumpSessionListVersion: () => void;
-  speedwagonListVersion: number;
-  bumpSpeedwagonListVersion: () => void;
+
+  // Speedwagons cache (API mirror)
+  speedwagons: ApiSpeedwagon[];
+  speedwagonsLoading: boolean;
+  fetchSpeedwagons: () => Promise<void>;
+
+  // Sources cache (API mirror)
+  sources: ApiSource[];
+  sourcesLoading: boolean;
+  fetchSources: () => Promise<void>;
 
   // Pending session model selection (before session is created)
   selectedProvider: ProviderName | null;
@@ -44,8 +58,38 @@ export const useAppStore = create<AppState>((set) => ({
   setActiveSession: (id) => set({ activeSessionId: id }),
   sessionListVersion: 0,
   bumpSessionListVersion: () => set((s) => ({ sessionListVersion: s.sessionListVersion + 1 })),
-  speedwagonListVersion: 0,
-  bumpSpeedwagonListVersion: () => set((s) => ({ speedwagonListVersion: s.speedwagonListVersion + 1 })),
+
+  // Speedwagons cache
+  speedwagons: [],
+  speedwagonsLoading: false,
+  fetchSpeedwagons: () => {
+    if (speedwagonsFetchPromise) return speedwagonsFetchPromise;
+    set({ speedwagonsLoading: true });
+    speedwagonsFetchPromise = apiGetSpeedwagons()
+      .then((data) => set({ speedwagons: data }))
+      .catch(() => {})
+      .finally(() => {
+        set({ speedwagonsLoading: false });
+        speedwagonsFetchPromise = null;
+      });
+    return speedwagonsFetchPromise;
+  },
+
+  // Sources cache
+  sources: [],
+  sourcesLoading: false,
+  fetchSources: () => {
+    if (sourcesFetchPromise) return sourcesFetchPromise;
+    set({ sourcesLoading: true });
+    sourcesFetchPromise = apiGetSources()
+      .then((data) => set({ sources: data }))
+      .catch(() => {})
+      .finally(() => {
+        set({ sourcesLoading: false });
+        sourcesFetchPromise = null;
+      });
+    return sourcesFetchPromise;
+  },
 
   // Pending session model selection
   selectedProvider: null,
