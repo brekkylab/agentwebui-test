@@ -7,6 +7,7 @@ import { cn } from "@/lib/utils";
 import { useAppStore } from "@/lib/store";
 import { getSessions, deleteSession as deleteSessionApi } from "@/lib/api";
 import type { ApiSession } from "@/lib/types";
+import { toast } from "sonner";
 
 export function SessionList() {
   const setActiveSession = useAppStore((s) => s.setActiveSession);
@@ -20,8 +21,8 @@ export function SessionList() {
     try {
       const data = await getSessions(false);
       setSessions(data);
-    } catch (err) {
-      console.warn("Failed to load sessions:", err);
+    } catch {
+      toast.error("세션 목록을 불러오지 못했습니다");
     }
   }, []);
 
@@ -50,8 +51,8 @@ export function SessionList() {
       if (activeSessionId === sessionId) {
         setActiveSession(null);
       }
-    } catch (err) {
-      console.warn("Failed to delete session:", err);
+    } catch {
+      toast.error("세션 삭제에 실패했습니다");
     }
   };
 

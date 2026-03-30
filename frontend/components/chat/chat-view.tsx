@@ -8,6 +8,7 @@ import { SpeedwagonPanel } from "@/components/chat/speedwagon-panel";
 import { IndexStatusBanner } from "@/components/chat/index-status-banner";
 import { ModelSelector } from "@/components/chat/model-selector";
 import { useAppStore } from "@/lib/store";
+import { toast } from "sonner";
 import { getSession, getAgent, updateAgent, updateSession } from "@/lib/api";
 import type { ProviderName } from "@/lib/constants";
 
@@ -44,8 +45,8 @@ export function ChatView({ sessionId }: ChatViewProps) {
           agent.spec.lm,
           session.provider_profile_id,
         );
-      }).catch((err) => console.warn("Failed to load agent:", err));
-    }).catch((err) => console.warn("Failed to load session:", err));
+      }).catch(() => toast.error("에이전트 로드에 실패했습니다"));
+    }).catch(() => toast.error("세션 로드에 실패했습니다"));
   }, [sessionId]);
 
   // Mid-session 모델 변경 핸들러

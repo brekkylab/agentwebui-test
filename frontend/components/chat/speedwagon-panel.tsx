@@ -8,6 +8,7 @@ import { Separator } from "@/components/ui/separator";
 import { useAppStore } from "@/lib/store";
 import { updateSession } from "@/lib/api";
 import type { ApiSpeedwagon } from "@/lib/types";
+import { toast } from "sonner";
 
 interface SpeedwagonPanelProps {
   onClose: () => void;
@@ -57,8 +58,8 @@ export function SpeedwagonPanel({
     try {
       await updateSession(sessionId, { speedwagon_ids: speedwagonIds, source_ids: sourceIds });
       bumpSessionListVersion();
-    } catch (err) {
-      console.error("Failed to update session:", err);
+    } catch {
+      toast.error("세션 업데이트에 실패했습니다");
     } finally {
       setSaving(false);
     }

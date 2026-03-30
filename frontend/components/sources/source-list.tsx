@@ -13,6 +13,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { deleteSource } from "@/lib/api";
+import { toast } from "sonner";
 import { useAppStore } from "@/lib/store";
 
 function formatFileSize(bytes: number): string {
@@ -52,8 +53,8 @@ export function SourceList({ refreshKey }: { refreshKey?: number }) {
       setExpandedId(null);
       fetchSources();
       fetchSpeedwagons();
-    } catch (error) {
-      console.error("Failed to delete source:", error);
+    } catch {
+      toast.error("Source 삭제에 실패했습니다");
     }
   };
 

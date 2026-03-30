@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback, useRef } from "react";
+import { toast } from "sonner";
 import { ChevronDown } from "lucide-react";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
@@ -54,8 +55,8 @@ export function ModelSelector({
           }
         }
       }
-    } catch (err: unknown) {
-      console.warn("Failed to load provider profiles:", err);
+    } catch {
+      toast.error("Provider 프로필을 불러오지 못했습니다");
     } finally {
       setLoading(false);
     }

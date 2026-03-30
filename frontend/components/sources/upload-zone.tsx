@@ -4,6 +4,7 @@ import { useCallback, useRef } from "react";
 import { Upload } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { uploadSource } from "@/lib/api";
+import { toast } from "sonner";
 
 export function useFileUpload(onUploaded?: () => void) {
   const handleFiles = useCallback(
@@ -11,8 +12,8 @@ export function useFileUpload(onUploaded?: () => void) {
       for (const file of Array.from(files)) {
         try {
           await uploadSource(file);
-        } catch (error) {
-          console.error("Upload failed:", error);
+        } catch {
+          toast.error("파일 업로드에 실패했습니다");
         }
       }
       onUploaded?.();
