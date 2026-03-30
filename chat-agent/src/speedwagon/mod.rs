@@ -38,6 +38,19 @@ pub struct SubAgentProvider {
     pub model_name: String,
 }
 
+impl SubAgentProvider {
+    /// Extract API credentials from the parent agent's provider.
+    pub fn from_provider(provider: &ailoy::AgentProvider, model_name: &str) -> Self {
+        match &provider.lm {
+            ailoy::LangModelProvider::API { url, api_key, .. } => Self {
+                api_key: api_key.clone().unwrap_or_default(),
+                api_url: url.to_string(),
+                model_name: model_name.to_string(),
+            },
+        }
+    }
+}
+
 /// Load KB configuration from `KNOWLEDGE_AGENTS_CONFIG` env var or `./data/knowledge_agents.json`.
 /// Relative paths in `index_dir` and `corpus_dirs` are resolved against the
 /// directory containing the JSON config file, not the process CWD.

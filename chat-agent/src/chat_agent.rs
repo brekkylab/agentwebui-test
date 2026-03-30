@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use ailoy::{
-    AgentProvider, AgentRuntime, AgentSpec, LangModelProvider, Message, Part, Role, ToolSet, Value,
+    AgentProvider, AgentRuntime, AgentSpec, Message, Part, Role, ToolSet, Value,
 };
 use futures::StreamExt as _;
 
@@ -45,7 +45,7 @@ impl ChatAgent {
     ) -> Self {
         ensure_default_tool_names(&mut spec, &kb_entries, &session_source_paths);
         // Extract API credentials and model name from the parent provider to pass to speedwagon sub-agents
-        let sub_provider = extract_sub_agent_provider(&provider, &spec.lm);
+        let sub_provider = SubAgentProvider::from_provider(&provider, &spec.lm);
         let runtime = AgentRuntime::new(
             spec,
             provider,
@@ -160,16 +160,6 @@ fn build_tool_set(
     tool_set
 }
 
-/// Extract API credentials and model name from the parent's provider for use by speedwagon sub-agents.
-fn extract_sub_agent_provider(provider: &AgentProvider, model_name: &str) -> SubAgentProvider {
-    match &provider.lm {
-        LangModelProvider::API { url, api_key, .. } => SubAgentProvider {
-            api_key: api_key.clone().unwrap_or_default(),
-            api_url: url.to_string(),
-            model_name: model_name.to_string(),
-        },
-    }
-}
 
 fn extract_assistant_text(message: &Message) -> Option<String> {
     let text = message
