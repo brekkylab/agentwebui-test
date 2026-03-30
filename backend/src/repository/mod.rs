@@ -86,21 +86,19 @@ pub trait Repository: Send + Sync {
     ) -> RepositoryResult<Vec<Session>>;
     async fn get_session(&self, id: Uuid) -> RepositoryResult<Option<Session>>;
     async fn delete_session(&self, id: Uuid) -> RepositoryResult<bool>;
-    async fn update_session_title(
-        &self,
-        id: Uuid,
-        title: String,
-    ) -> RepositoryResult<bool>;
-    async fn update_session_provider_profile_id(
-        &self,
-        id: Uuid,
-        provider_profile_id: Uuid,
-    ) -> RepositoryResult<bool>;
     async fn add_session_message(
         &self,
         session_id: Uuid,
         role: MessageRole,
         content: String,
+    ) -> RepositoryResult<Option<Session>>;
+    async fn update_session_atomic(
+        &self,
+        id: Uuid,
+        title: Option<String>,
+        provider_profile_id: Option<Uuid>,
+        speedwagon_ids: Option<Vec<Uuid>>,
+        source_ids: Option<Vec<Uuid>>,
     ) -> RepositoryResult<Option<Session>>;
 
     // --- Source ---

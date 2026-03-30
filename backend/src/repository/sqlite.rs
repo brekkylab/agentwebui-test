@@ -878,46 +878,6 @@ impl Repository for SqliteRepository {
         Ok(result.rows_affected() > 0)
     }
 
-    async fn update_session_title(&self, id: Uuid, title: String) -> RepositoryResult<bool> {
-        let now = Self::now_string();
-        let result = sqlx::query(
-            r#"
-            UPDATE sessions
-            SET title = ?, updated_at = ?
-            WHERE id = ?;
-            "#,
-        )
-        .bind(title)
-        .bind(now)
-        .bind(id.to_string())
-        .execute(&self.pool)
-        .await?;
-
-        Ok(result.rows_affected() > 0)
-    }
-
-    async fn update_session_provider_profile_id(
-        &self,
-        id: Uuid,
-        provider_profile_id: Uuid,
-    ) -> RepositoryResult<bool> {
-        let now = Self::now_string();
-        let result = sqlx::query(
-            r#"
-            UPDATE sessions
-            SET provider_profile_id = ?, updated_at = ?
-            WHERE id = ?;
-            "#,
-        )
-        .bind(provider_profile_id.to_string())
-        .bind(now)
-        .bind(id.to_string())
-        .execute(&self.pool)
-        .await?;
-
-        Ok(result.rows_affected() > 0)
-    }
-
     async fn add_session_message(
         &self,
         session_id: Uuid,
@@ -973,6 +933,92 @@ impl Repository for SqliteRepository {
 
         tx.commit().await?;
         self.load_session_by_id(session_id).await
+    }
+
+    async fn update_session_atomic(
+        &self,
+        id: Uuid,
+        title: Option<String>,
+        provider_profile_id: Option<Uuid>,
+        speedwagon_ids: Option<Vec<Uuid>>,
+        source_ids: Option<Vec<Uuid>>,
+    ) -> RepositoryResult<Option<Session>> {
+        let id_str = id.to_string();
+
+        let mut tx = self.pool.begin().await?;
+
+        // Check session exists inside the transaction
+        let exists: bool = sqlx::query_scalar("SELECT COUNT(*) > 0 FROM sessions WHERE id = ?")
+            .bind(&id_str)
+            .fetch_one(tx.as_mut())
+            .await?;
+
+        if !exists {
+            tx.rollback().await?;
+            return Ok(None);
+        }
+
+        let now = Self::now_string();
+
+        if let Some(title) = title {
+            sqlx::query("UPDATE sessions SET title = ?, updated_at = ? WHERE id = ?")
+                .bind(&title)
+                .bind(&now)
+                .bind(&id_str)
+                .execute(tx.as_mut())
+                .await?;
+        }
+
+        if let Some(provider_profile_id) = provider_profile_id {
+            sqlx::query("UPDATE sessions SET provider_profile_id = ?, updated_at = ? WHERE id = ?")
+                .bind(provider_profile_id.to_string())
+                .bind(&now)
+                .bind(&id_str)
+                .execute(tx.as_mut())
+                .await?;
+        }
+
+        if let Some(speedwagon_ids) = speedwagon_ids {
+            sqlx::query("DELETE FROM session_speedwagons WHERE session_id = ?")
+                .bind(&id_str)
+                .execute(tx.as_mut())
+                .await?;
+            for sw_id in &speedwagon_ids {
+                sqlx::query("INSERT INTO session_speedwagons (session_id, speedwagon_id) VALUES (?, ?)")
+                    .bind(&id_str)
+                    .bind(sw_id.to_string())
+                    .execute(tx.as_mut())
+                    .await?;
+            }
+            sqlx::query("UPDATE sessions SET updated_at = ? WHERE id = ?")
+                .bind(&now)
+                .bind(&id_str)
+                .execute(tx.as_mut())
+                .await?;
+        }
+
+        if let Some(source_ids) = source_ids {
+            sqlx::query("DELETE FROM session_sources WHERE session_id = ?")
+                .bind(&id_str)
+                .execute(tx.as_mut())
+                .await?;
+            for src_id in &source_ids {
+                sqlx::query("INSERT INTO session_sources (session_id, source_id) VALUES (?, ?)")
+                    .bind(&id_str)
+                    .bind(src_id.to_string())
+                    .execute(tx.as_mut())
+                    .await?;
+            }
+            sqlx::query("UPDATE sessions SET updated_at = ? WHERE id = ?")
+                .bind(&now)
+                .bind(&id_str)
+                .execute(tx.as_mut())
+                .await?;
+        }
+
+        tx.commit().await?;
+
+        self.get_session(id).await
     }
 
     // --- Source ---

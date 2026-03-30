@@ -4,8 +4,6 @@ use actix_multipart::Multipart;
 use actix_web::http::StatusCode;
 use actix_web::{HttpResponse, web};
 use futures_util::StreamExt;
-use ailoy::{AgentProvider, LangModelAPISchema, LangModelProvider};
-use chat_agent::ChatAgentRunError;
 use serde::Serialize;
 use utoipa::{OpenApi, ToSchema};
 use uuid::Uuid;
@@ -18,10 +16,12 @@ use crate::models::{
     CreateAgentRequest, CreateProviderProfileRequest,
     CreateSessionRequest, CreateSpeedwagonRequest, ErrorResponse, ListSessionsQuery, MessageRole,
     ProviderProfile, ProviderProfileResponse, Session, SessionMessage, SourceResponse, SourceType,
-    Speedwagon, SpeedwagonIndexStatus, SpeedwagonResponse,
+    SpeedwagonIndexStatus, SpeedwagonResponse,
     UpdateAgentRequest, UpdateProviderProfileRequest, UpdateSessionRequest, UpdateSpeedwagonRequest,
 };
 use crate::repository::RepositoryError;
+use crate::services::session as session_service;
+use crate::services::speedwagon as speedwagon_service;
 use crate::state::AppState;
 
 #[derive(Serialize, ToSchema)]
@@ -457,35 +457,9 @@ async fn delete_provider_profile(
 async fn create_session(
     state: web::Data<AppState>,
     payload: web::Json<CreateSessionRequest>,
-) -> HttpResponse {
-    let CreateSessionRequest {
-        agent_id,
-        provider_profile_id,
-        title,
-        speedwagon_ids,
-        source_ids,
-    } = payload.into_inner();
-
-    match state.repository.get_agent(agent_id).await {
-        Ok(Some(_)) => {}
-        Ok(None) => return json_error(StatusCode::NOT_FOUND, "agent not found"),
-        Err(error) => return repository_error_response(error),
-    }
-
-    let resolved_provider_profile_id =
-        match resolve_provider_profile_id(&state, provider_profile_id).await {
-            Ok(provider_profile_id) => provider_profile_id,
-            Err(response) => return response,
-        };
-
-    match state
-        .repository
-        .create_session(agent_id, resolved_provider_profile_id, title, speedwagon_ids, source_ids)
-        .await
-    {
-        Ok(session) => HttpResponse::Created().json(session),
-        Err(error) => repository_error_response(error),
-    }
+) -> Result<HttpResponse, session_service::SessionError> {
+    let session = session_service::create_session(&state, payload.into_inner()).await?;
+    Ok(HttpResponse::Created().json(session))
 }
 
 #[utoipa::path(
@@ -549,70 +523,10 @@ async fn update_session(
     state: web::Data<AppState>,
     path: web::Path<Uuid>,
     payload: web::Json<UpdateSessionRequest>,
-) -> HttpResponse {
+) -> Result<HttpResponse, session_service::SessionError> {
     let id = path.into_inner();
-    let req = payload.into_inner();
-
-    // Verify session exists first
-    match state.repository.get_session(id).await {
-        Ok(None) => return json_error(StatusCode::NOT_FOUND, "session not found"),
-        Err(error) => return repository_error_response(error),
-        Ok(Some(_)) => {}
-    }
-
-    if let Some(title) = req.title {
-        if let Err(error) = state.repository.update_session_title(id, title).await {
-            return repository_error_response(error);
-        }
-    }
-
-    if let Some(provider_profile_id) = req.provider_profile_id {
-        // Verify provider profile exists
-        match state.repository.get_provider_profile(provider_profile_id).await {
-            Ok(None) => {
-                return json_error(StatusCode::NOT_FOUND, "provider profile not found");
-            }
-            Err(error) => return repository_error_response(error),
-            Ok(Some(_)) => {}
-        }
-
-        if let Err(error) = state
-            .repository
-            .update_session_provider_profile_id(id, provider_profile_id)
-            .await
-        {
-            return repository_error_response(error);
-        }
-        state.invalidate_session_runtime(id);
-    }
-
-    if let Some(speedwagon_ids) = req.speedwagon_ids {
-        if let Err(error) = state
-            .repository
-            .set_session_speedwagons(id, speedwagon_ids)
-            .await
-        {
-            return repository_error_response(error);
-        }
-        state.invalidate_session_runtime(id);
-    }
-
-    if let Some(source_ids) = req.source_ids {
-        if let Err(error) = state
-            .repository
-            .set_session_sources(id, source_ids)
-            .await
-        {
-            return repository_error_response(error);
-        }
-        state.invalidate_session_runtime(id);
-    }
-
-    match state.repository.get_session(id).await {
-        Ok(Some(session)) => HttpResponse::Ok().json(session),
-        Ok(None) => json_error(StatusCode::NOT_FOUND, "session not found"),
-        Err(error) => repository_error_response(error),
-    }
+    let session = session_service::update_session(&state, id, payload.into_inner()).await?;
+    Ok(HttpResponse::Ok().json(session))
 }
 
 #[utoipa::path(
@@ -625,17 +539,13 @@ async fn update_session(
         (status = 404, description = "Session not found", body = ErrorResponse)
     )
 )]
-async fn delete_session(state: web::Data<AppState>, path: web::Path<Uuid>) -> HttpResponse {
+async fn delete_session(
+    state: web::Data<AppState>,
+    path: web::Path<Uuid>,
+) -> Result<HttpResponse, session_service::SessionError> {
     let id = path.into_inner();
-
-    match state.repository.delete_session(id).await {
-        Ok(true) => {
-            state.invalidate_session_runtime(id);
-            HttpResponse::NoContent().finish()
-        }
-        Ok(false) => json_error(StatusCode::NOT_FOUND, "session not found"),
-        Err(error) => repository_error_response(error),
-    }
+    session_service::delete_session(&state, id).await?;
+    Ok(HttpResponse::NoContent().finish())
 }
 
 #[utoipa::path(
@@ -655,77 +565,11 @@ async fn add_message(
     state: web::Data<AppState>,
     path: web::Path<Uuid>,
     payload: web::Json<AddSessionMessageRequest>,
-) -> HttpResponse {
+) -> Result<HttpResponse, session_service::SessionError> {
     let id = path.into_inner();
     let AddSessionMessageRequest { role, content } = payload.into_inner();
-
-    if content.trim().is_empty() {
-        return json_error(StatusCode::BAD_REQUEST, "message content is empty");
-    }
-
-    let session = match state
-        .repository
-        .add_session_message(id, role.clone(), content.clone())
-        .await
-    {
-        Ok(Some(session)) => session,
-        Ok(None) => return json_error(StatusCode::NOT_FOUND, "session not found"),
-        Err(error) => return repository_error_response(error),
-    };
-
-    if !matches!(role, MessageRole::User) {
-        return HttpResponse::Ok().json(AddSessionMessageResponse {
-            assistant_message: None,
-        });
-    }
-
-    let runtime = match state.get_or_create_runtime_for_session(&session).await {
-        Ok(runtime) => runtime,
-        Err(error) => {
-            eprintln!("runtime initialization error: {error}");
-            return json_error(
-                StatusCode::BAD_GATEWAY,
-                "failed to initialize agent runtime",
-            );
-        }
-    };
-
-    let runtime_output = {
-        let mut runtime = runtime.lock().await;
-        runtime.run_user_text(content).await
-    };
-
-    let assistant_text = match runtime_output {
-        Ok(text) => text,
-        Err(ChatAgentRunError::NoTextContent) => {
-            return json_error(
-                StatusCode::BAD_GATEWAY,
-                "model response did not include text content",
-            );
-        }
-        Err(ChatAgentRunError::Runtime { source }) => {
-            eprintln!("runtime execution error: {source}");
-            return json_error(StatusCode::BAD_GATEWAY, "failed to run language model");
-        }
-    };
-
-    match state
-        .repository
-        .add_session_message(id, MessageRole::Assistant, assistant_text)
-        .await
-    {
-        Ok(Some(updated_session)) => {
-            let assistant_message = updated_session
-                .messages
-                .last()
-                .cloned()
-                .filter(|message| matches!(message.role, MessageRole::Assistant));
-
-            HttpResponse::Ok().json(AddSessionMessageResponse { assistant_message })
-        }
-        Ok(None) => json_error(StatusCode::NOT_FOUND, "session not found"),
-        Err(error) => repository_error_response(error),
-    }
+    let response = session_service::send_message(&state, id, role, content).await?;
+    Ok(HttpResponse::Ok().json(response))
 }
 
 // ===================== Source Handlers =====================
@@ -900,13 +744,9 @@ async fn delete_source(state: web::Data<AppState>, path: web::Path<Uuid>) -> Htt
 async fn create_speedwagon(
     state: web::Data<AppState>,
     payload: web::Json<CreateSpeedwagonRequest>,
-) -> HttpResponse {
-    let CreateSpeedwagonRequest { name, description, instruction, lm, source_ids } = payload.into_inner();
-
-    match state.repository.create_speedwagon(name, description, instruction, lm, source_ids).await {
-        Ok(sw) => HttpResponse::Created().json(SpeedwagonResponse::from(&sw)),
-        Err(error) => repository_error_response(error),
-    }
+) -> Result<HttpResponse, speedwagon_service::SpeedwagonError> {
+    let sw = speedwagon_service::create_speedwagon(&state, payload.into_inner()).await?;
+    Ok(HttpResponse::Created().json(SpeedwagonResponse::from(&sw)))
 }
 
 #[utoipa::path(
@@ -959,15 +799,10 @@ async fn update_speedwagon(
     state: web::Data<AppState>,
     path: web::Path<Uuid>,
     payload: web::Json<UpdateSpeedwagonRequest>,
-) -> HttpResponse {
+) -> Result<HttpResponse, speedwagon_service::SpeedwagonError> {
     let id = path.into_inner();
-    let UpdateSpeedwagonRequest { name, description, instruction, lm, source_ids } = payload.into_inner();
-
-    match state.repository.update_speedwagon(id, name, description, instruction, lm, source_ids).await {
-        Ok(Some(sw)) => HttpResponse::Ok().json(SpeedwagonResponse::from(&sw)),
-        Ok(None) => json_error(StatusCode::NOT_FOUND, "speedwagon not found"),
-        Err(error) => repository_error_response(error),
-    }
+    let sw = speedwagon_service::update_speedwagon(&state, id, payload.into_inner()).await?;
+    Ok(HttpResponse::Ok().json(SpeedwagonResponse::from(&sw)))
 }
 
 #[utoipa::path(
@@ -980,30 +815,13 @@ async fn update_speedwagon(
         (status = 404, description = "Not found", body = ErrorResponse)
     )
 )]
-async fn delete_speedwagon(state: web::Data<AppState>, path: web::Path<Uuid>) -> HttpResponse {
+async fn delete_speedwagon(
+    state: web::Data<AppState>,
+    path: web::Path<Uuid>,
+) -> Result<HttpResponse, speedwagon_service::SpeedwagonError> {
     let id = path.into_inner();
-
-    // Get data_dir before deleting
-    let sw = match state.repository.get_speedwagon(id).await {
-        Ok(Some(sw)) => sw,
-        Ok(None) => return json_error(StatusCode::NOT_FOUND, "speedwagon not found"),
-        Err(error) => return repository_error_response(error),
-    };
-
-    match state.repository.delete_speedwagon(id).await {
-        Ok(true) => {
-            // Delete data/speedwagons/{id}/ directory from disk
-            let dir = state.speedwagon_data_dir.join(sw.id.to_string());
-            if dir.exists() {
-                if let Err(e) = std::fs::remove_dir_all(&dir) {
-                    eprintln!("failed to delete speedwagon dir {}: {e}", dir.display());
-                }
-            }
-            HttpResponse::NoContent().finish()
-        }
-        Ok(false) => json_error(StatusCode::NOT_FOUND, "speedwagon not found"),
-        Err(error) => repository_error_response(error),
-    }
+    speedwagon_service::delete_speedwagon(&state, id).await?;
+    Ok(HttpResponse::NoContent().finish())
 }
 
 #[utoipa::path(
@@ -1018,43 +836,14 @@ async fn delete_speedwagon(state: web::Data<AppState>, path: web::Path<Uuid>) ->
         (status = 422, description = "No sources", body = ErrorResponse)
     )
 )]
-async fn index_speedwagon(state: web::Data<AppState>, path: web::Path<Uuid>) -> HttpResponse {
+async fn index_speedwagon(
+    state: web::Data<AppState>,
+    path: web::Path<Uuid>,
+) -> Result<HttpResponse, speedwagon_service::SpeedwagonError> {
     let id = path.into_inner();
 
-    let sw: Speedwagon = match state.repository.get_speedwagon(id).await {
-        Ok(Some(sw)) => sw,
-        Ok(None) => return json_error(StatusCode::NOT_FOUND, "speedwagon not found"),
-        Err(error) => return repository_error_response(error),
-    };
+    let sw = speedwagon_service::start_indexing(&state, id).await?;
 
-    if sw.source_ids.is_empty() {
-        return json_error(StatusCode::UNPROCESSABLE_ENTITY, "speedwagon has no sources");
-    }
-
-    // Concurrent indexing guard
-    if sw.index_status == SpeedwagonIndexStatus::Indexing {
-        return json_error(StatusCode::CONFLICT, "indexing already in progress");
-    }
-
-    // Set status to indexing
-    let now = chrono::Utc::now();
-    if let Err(error) = state
-        .repository
-        .update_speedwagon_index_status(
-            id,
-            SpeedwagonIndexStatus::Indexing,
-            None,
-            None,
-            None,
-            Some(now),
-            None,
-        )
-        .await
-    {
-        return repository_error_response(error);
-    }
-
-    // Clone everything needed for the background task
     let repository = Arc::clone(&state.repository);
     let speedwagon_data_dir = state.speedwagon_data_dir.clone();
     let state_clone = state.clone();
@@ -1069,62 +858,7 @@ async fn index_speedwagon(state: web::Data<AppState>, path: web::Path<Uuid>) -> 
         .await;
     });
 
-    HttpResponse::Accepted().finish()
-}
-
-async fn resolve_provider_profile_id(
-    state: &web::Data<AppState>,
-    requested_provider_profile_id: Option<Uuid>,
-) -> Result<Uuid, HttpResponse> {
-    if let Some(provider_profile_id) = requested_provider_profile_id {
-        return match state
-            .repository
-            .get_provider_profile(provider_profile_id)
-            .await
-        {
-            Ok(Some(_)) => Ok(provider_profile_id),
-            Ok(None) => Err(json_error(
-                StatusCode::NOT_FOUND,
-                "provider profile not found",
-            )),
-            Err(error) => Err(repository_error_response(error)),
-        };
-    }
-
-    let profiles = state
-        .repository
-        .list_provider_profiles()
-        .await
-        .map_err(repository_error_response)?;
-
-    let Some(profile) = profiles
-        .iter()
-        .filter(|profile| profile.is_default)
-        .min_by(|a, b| {
-            provider_priority(&a.provider)
-                .cmp(&provider_priority(&b.provider))
-                .then_with(|| a.created_at.cmp(&b.created_at))
-                .then_with(|| a.id.cmp(&b.id))
-        })
-    else {
-        return Err(json_error(
-            StatusCode::BAD_REQUEST,
-            "no default provider profile available",
-        ));
-    };
-
-    Ok(profile.id)
-}
-
-fn provider_priority(provider: &AgentProvider) -> u8 {
-    match &provider.lm {
-        LangModelProvider::API { schema, .. } => match schema {
-            LangModelAPISchema::ChatCompletion => 0,
-            LangModelAPISchema::Anthropic => 1,
-            LangModelAPISchema::Gemini => 2,
-            LangModelAPISchema::OpenAI => 3,
-        },
-    }
+    Ok(HttpResponse::Accepted().finish())
 }
 
 fn to_agent_response(agent: &Agent) -> AgentResponse {

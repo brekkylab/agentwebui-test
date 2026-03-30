@@ -114,23 +114,22 @@ impl Repository for PostgresRepository {
         todo!("postgres implementation")
     }
 
-    async fn update_session_title(&self, _id: Uuid, _title: String) -> RepositoryResult<bool> {
-        todo!("postgres implementation")
-    }
-
-    async fn update_session_provider_profile_id(
-        &self,
-        _id: Uuid,
-        _provider_profile_id: Uuid,
-    ) -> RepositoryResult<bool> {
-        todo!("postgres implementation")
-    }
-
     async fn add_session_message(
         &self,
         _session_id: Uuid,
         _role: MessageRole,
         _content: String,
+    ) -> RepositoryResult<Option<Session>> {
+        todo!("postgres implementation")
+    }
+
+    async fn update_session_atomic(
+        &self,
+        _id: Uuid,
+        _title: Option<String>,
+        _provider_profile_id: Option<Uuid>,
+        _speedwagon_ids: Option<Vec<Uuid>>,
+        _source_ids: Option<Vec<Uuid>>,
     ) -> RepositoryResult<Option<Session>> {
         todo!("postgres implementation")
     }
