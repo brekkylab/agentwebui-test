@@ -28,25 +28,6 @@ export interface ApiSpeedwagon {
   updated_at: string;
 }
 
-export interface SessionSource {
-  name: string;
-  size: number;
-}
-
-export interface ChatMessage {
-  role: "user" | "assistant";
-  content: string;
-  createdAt: Date;
-}
-
-export interface ChatSession {
-  id: string;
-  title: string;
-  messages: ChatMessage[];
-  knowledgeIds: string[];
-  sessionSources: SessionSource[];
-}
-
 // --- Backend API Response Types ---
 
 export interface ApiProviderProfile {
