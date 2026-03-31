@@ -6,6 +6,7 @@
 //! Each invocation is stateless — the sub-agent has no memory of prior calls.
 
 pub mod dispatch;
+pub mod indexing;
 
 use serde::Deserialize;
 

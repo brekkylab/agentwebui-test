@@ -164,16 +164,11 @@ pub async fn start_indexing(
         }
     };
 
-    // Run knowledge_agent::build_index_multi in spawn_blocking (it's a synchronous CPU-intensive operation)
+    // Run index build in spawn_blocking (it's a synchronous CPU-intensive operation)
     let corpus_dirs = vec![corpus_dir.clone()];
     let index_tmp = index_tmp_dir.clone();
     let index_result = tokio::task::spawn_blocking(move || {
-        knowledge_agent::build_index_multi(
-            &index_tmp,
-            &corpus_dirs,
-            &knowledge_agent::IndexSettings { schema_version: 1, no_merge: false },
-            true,
-        )
+        chat_agent::speedwagon::indexing::build_index(&index_tmp, &corpus_dirs, true)
     })
     .await;
 
