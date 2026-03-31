@@ -19,8 +19,6 @@ pub enum SpeedwagonError {
     NoSources,
     #[error(transparent)]
     Repository(#[from] RepositoryError),
-    #[error("indexing error: {0}")]
-    Indexing(String),
 }
 
 impl ResponseError for SpeedwagonError {
@@ -30,7 +28,6 @@ impl ResponseError for SpeedwagonError {
             Self::AlreadyIndexing => StatusCode::CONFLICT,
             Self::NoSources => StatusCode::UNPROCESSABLE_ENTITY,
             Self::Repository(_) => StatusCode::INTERNAL_SERVER_ERROR,
-            Self::Indexing(_) => StatusCode::INTERNAL_SERVER_ERROR,
         }
     }
 
