@@ -3,6 +3,16 @@
 //! Contains the default tools (`utc_now`, `add_integers`) and the `read_source`
 //! tool. These are tools used directly by the parent ChatAgent — **not** by
 //! speedwagon sub-agents (which live in `speedwagon/`).
+//!
+//! ## Adding a new tool
+//!
+//! 1. Define `build_X_tool(...) -> Option<(String, ToolRuntime)>` in this module
+//!    (or a new module for complex tools — see `speedwagon/dispatch.rs`).
+//! 2. Add the call to `build_tool_set()` in `chat_agent.rs`.
+//!    Names and runtimes are collected together, so no separate registration step.
+//!
+//! This convention is intentionally simple for the current scale (4 tools).
+//! A trait-based plugin system may replace it when dynamic tool loading is needed.
 
 use std::path::PathBuf;
 use std::sync::Arc;
