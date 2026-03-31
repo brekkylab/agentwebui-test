@@ -8,6 +8,8 @@ import {
   MessagePrimitive,
 } from "@assistant-ui/react";
 
+import { MarkdownRenderer } from "@/components/chat/markdown-renderer";
+
 export const Thread: FC<{ composerLeft?: React.ReactNode }> = ({ composerLeft }) => {
   return (
     <ThreadPrimitive.Root className="flex h-full flex-col bg-background">
@@ -74,7 +76,11 @@ export const AssistantMessage: FC = () => {
   return (
     <MessagePrimitive.Root className="relative mx-auto w-full max-w-2xl py-4">
       <div className="leading-7 break-words text-foreground">
-        <MessagePrimitive.Content />
+        <MessagePrimitive.Content
+          components={{
+            Text: ({ text }) => <MarkdownRenderer content={text} />,
+          }}
+        />
       </div>
     </MessagePrimitive.Root>
   );

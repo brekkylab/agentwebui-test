@@ -4,6 +4,7 @@ import { useEffect, useState, useCallback } from "react";
 import { Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { getProviderProfiles, deleteProviderProfile, ApiError } from "@/lib/api";
+import { toast } from "sonner";
 import type { ApiProviderProfile } from "@/lib/types";
 
 export function ProviderList() {
@@ -38,9 +39,9 @@ export function ProviderList() {
       setProfiles((prev) => prev.filter((p) => p.id !== id));
     } catch (err) {
       if (err instanceof ApiError && err.status === 409) {
-        alert("이 Provider를 사용하는 세션이 있어 삭제할 수 없습니다.\n해당 세션을 먼저 삭제해 주세요.");
-      } else if (err instanceof ApiError) {
-        setError(err.message);
+        toast.error("이 Provider를 사용하는 세션이 있어 삭제할 수 없습니다");
+      } else {
+        toast.error("Provider 삭제에 실패했습니다");
       }
     }
   };
