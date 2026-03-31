@@ -20,8 +20,8 @@ async fn main() -> std::io::Result<()> {
     println!("server listening on http://{bind_addr}");
 
     HttpServer::new(move || {
-        // TODO: 프로덕션 배포 시 allow_any_origin() → allowed_origin("https://your-domain.com")으로 변경 필요
-        // 또는 리버스 프록시(Nginx/Caddy)로 같은 도메인에 배포하면 CORS 설정 자체가 불필요
+        // TODO: Replace allow_any_origin() with allowed_origin("https://your-domain.com") for production
+        // Alternatively, deploying behind a reverse proxy (Nginx/Caddy) on the same domain eliminates the need for CORS
         let cors = Cors::default()
             .allow_any_origin()
             .allowed_methods(vec!["GET", "POST", "PUT", "DELETE"])

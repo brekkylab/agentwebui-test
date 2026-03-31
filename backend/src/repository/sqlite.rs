@@ -1178,7 +1178,7 @@ impl Repository for SqliteRepository {
         .fetch_all(&self.pool)
         .await?;
 
-        // Bulk-load all speedwagon_sources in a single query to avoid N+1
+        // Bulk-load all speedwagon_sources into HashMap<speedwagon_id, [source_id]>
         let source_rows = sqlx::query(
             "SELECT speedwagon_id, source_id FROM speedwagon_sources;",
         )
@@ -1201,6 +1201,7 @@ impl Repository for SqliteRepository {
         let mut speedwagons = Vec::with_capacity(rows.len());
         for row in &rows {
             let mut sw = Self::row_to_speedwagon_without_sources(row)?;
+            // remove: takes ownership from HashMap, avoiding clone
             sw.source_ids = source_map.remove(&sw.id).unwrap_or_default();
             speedwagons.push(sw);
         }
