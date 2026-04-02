@@ -2,8 +2,9 @@
 
 import { useState, useRef, useEffect } from "react";
 import { Pencil } from "lucide-react";
-import { updateSessionTitle, getSession, ApiError } from "@/lib/api";
+import { updateSessionTitle, getSession } from "@/lib/api";
 import { useAppStore } from "@/lib/store";
+import { toast } from "sonner";
 
 interface SessionTitleProps {
   sessionId: string;
@@ -53,10 +54,8 @@ export function SessionTitle({ sessionId }: SessionTitleProps) {
       setTitle(trimmed);
       setEditing(false);
       useAppStore.getState().bumpSessionListVersion();
-    } catch (err) {
-      if (err instanceof ApiError) {
-        console.error("Failed to update title:", err.message);
-      }
+    } catch {
+      toast.error("제목 변경에 실패했습니다");
     } finally {
       setSaving(false);
     }

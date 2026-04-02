@@ -1,28 +1,28 @@
 import { create } from "zustand";
-import type { SessionSource } from "./types";
 import type { ProviderName } from "./constants";
+import type { ApiSpeedwagon, ApiSource } from "./types";
+import { getSpeedwagons as apiGetSpeedwagons, getSources as apiGetSources } from "./api";
 
 // ============================================================
 // Zustand State Boundary
 // ============================================================
-// Backend (API)       | Zustand (UI state)
-// --------------------|---------------------------
+// Backend (API)       | Zustand (UI state + read-only list cache)
+// --------------------|------------------------------------------
 // Provider Profiles   | —
 // Agents              | —
 // Sessions list       | —
 // Session messages    | —
-// Sources             | —
-// Knowledges          | —
+// Sources             | sources (캐시)
+// Speedwagons         | speedwagons (캐시)
+// Session speedwagon/source relationships | —
 // —                   | activeSessionId
 // —                   | selectedProvider / selectedModel (pending session용)
-// —                   | pendingKnowledgeIds (pending session용)
-// —                   | sessionLocalData (Knowledge/Source associations per session)
+// —                   | pendingSpeedwagonIds (pending session용)
 // ============================================================
 
-interface SessionLocalData {
-  knowledgeIds: string[];
-  sessionSources: SessionSource[];
-}
+// Promise dedup: 동시 호출 시 동일 Promise 재사용
+let speedwagonsFetchPromise: Promise<void> | null = null;
+let sourcesFetchPromise: Promise<void> | null = null;
 
 interface AppState {
   // Active session (UI state)
@@ -31,36 +31,65 @@ interface AppState {
   sessionListVersion: number;
   bumpSessionListVersion: () => void;
 
+  // Speedwagons cache (API mirror)
+  speedwagons: ApiSpeedwagon[];
+  speedwagonsLoading: boolean;
+  fetchSpeedwagons: () => Promise<void>;
+
+  // Sources cache (API mirror)
+  sources: ApiSource[];
+  sourcesLoading: boolean;
+  fetchSources: () => Promise<void>;
+
   // Pending session model selection (before session is created)
   selectedProvider: ProviderName | null;
   selectedModel: string | null;
   selectedProfileId: string | null;
   setSelectedModel: (provider: ProviderName, model: string, profileId: string) => void;
 
-  // Pending session knowledge selection
-  pendingKnowledgeIds: string[];
-  setPendingKnowledgeIds: (ids: string[]) => void;
-
-  // Per-session local data (Knowledge/Source associations — not in Backend)
-  sessionLocalData: Record<string, SessionLocalData>;
-  getSessionLocalData: (sessionId: string) => SessionLocalData;
-  updateSessionKnowledge: (sessionId: string, knowledgeIds: string[]) => void;
-  addSessionSource: (sessionId: string, src: SessionSource) => void;
-  removeSessionSource: (sessionId: string, index: number) => void;
-  removeSessionLocalData: (sessionId: string) => void;
+  // Pending session speedwagon selection (before session is created)
+  pendingSpeedwagonIds: string[];
+  setPendingSpeedwagonIds: (ids: string[]) => void;
 }
 
-const DEFAULT_SESSION_LOCAL: SessionLocalData = {
-  knowledgeIds: [],
-  sessionSources: [],
-};
-
-export const useAppStore = create<AppState>((set, get) => ({
+export const useAppStore = create<AppState>((set) => ({
   // Active session
   activeSessionId: null,
   setActiveSession: (id) => set({ activeSessionId: id }),
   sessionListVersion: 0,
   bumpSessionListVersion: () => set((s) => ({ sessionListVersion: s.sessionListVersion + 1 })),
+
+  // Speedwagons cache
+  speedwagons: [],
+  speedwagonsLoading: false,
+  fetchSpeedwagons: () => {
+    if (speedwagonsFetchPromise) return speedwagonsFetchPromise;
+    set({ speedwagonsLoading: true });
+    speedwagonsFetchPromise = apiGetSpeedwagons()
+      .then((data) => set({ speedwagons: data }))
+      .catch(() => {})
+      .finally(() => {
+        set({ speedwagonsLoading: false });
+        speedwagonsFetchPromise = null;
+      });
+    return speedwagonsFetchPromise;
+  },
+
+  // Sources cache
+  sources: [],
+  sourcesLoading: false,
+  fetchSources: () => {
+    if (sourcesFetchPromise) return sourcesFetchPromise;
+    set({ sourcesLoading: true });
+    sourcesFetchPromise = apiGetSources()
+      .then((data) => set({ sources: data }))
+      .catch(() => {})
+      .finally(() => {
+        set({ sourcesLoading: false });
+        sourcesFetchPromise = null;
+      });
+    return sourcesFetchPromise;
+  },
 
   // Pending session model selection
   selectedProvider: null,
@@ -69,54 +98,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   setSelectedModel: (provider, model, profileId) =>
     set({ selectedProvider: provider, selectedModel: model, selectedProfileId: profileId }),
 
-  // Pending session knowledge selection
-  pendingKnowledgeIds: [],
-  setPendingKnowledgeIds: (ids) => set({ pendingKnowledgeIds: ids }),
-
-  // Per-session local data
-  sessionLocalData: {},
-  getSessionLocalData: (sessionId) => {
-    return get().sessionLocalData[sessionId] ?? DEFAULT_SESSION_LOCAL;
-  },
-  updateSessionKnowledge: (sessionId, knowledgeIds) =>
-    set((s) => ({
-      sessionLocalData: {
-        ...s.sessionLocalData,
-        [sessionId]: {
-          ...(s.sessionLocalData[sessionId] ?? DEFAULT_SESSION_LOCAL),
-          knowledgeIds,
-        },
-      },
-    })),
-  addSessionSource: (sessionId, src) =>
-    set((s) => {
-      const current = s.sessionLocalData[sessionId] ?? DEFAULT_SESSION_LOCAL;
-      return {
-        sessionLocalData: {
-          ...s.sessionLocalData,
-          [sessionId]: {
-            ...current,
-            sessionSources: [...current.sessionSources, src],
-          },
-        },
-      };
-    }),
-  removeSessionSource: (sessionId, index) =>
-    set((s) => {
-      const current = s.sessionLocalData[sessionId] ?? DEFAULT_SESSION_LOCAL;
-      return {
-        sessionLocalData: {
-          ...s.sessionLocalData,
-          [sessionId]: {
-            ...current,
-            sessionSources: current.sessionSources.filter((_, i) => i !== index),
-          },
-        },
-      };
-    }),
-  removeSessionLocalData: (sessionId) =>
-    set((s) => {
-      const { [sessionId]: _, ...rest } = s.sessionLocalData;
-      return { sessionLocalData: rest };
-    }),
+  // Pending session speedwagon selection
+  pendingSpeedwagonIds: [],
+  setPendingSpeedwagonIds: (ids) => set({ pendingSpeedwagonIds: ids }),
 }));

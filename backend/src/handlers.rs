@@ -1,9 +1,9 @@
+use std::sync::Arc;
+
 use actix_multipart::Multipart;
 use actix_web::http::StatusCode;
 use actix_web::{HttpResponse, web};
 use futures_util::StreamExt;
-use ailoy::{AgentProvider, LangModelAPISchema, LangModelProvider};
-use chat_agent::ChatAgentRunError;
 use serde::Serialize;
 use utoipa::{OpenApi, ToSchema};
 use uuid::Uuid;
@@ -13,12 +13,15 @@ use crate::agent::spec::{
 };
 use crate::models::{
     AddSessionMessageRequest, AddSessionMessageResponse, Agent, AgentResponse,
-    CreateAgentRequest, CreateKnowledgeRequest, CreateProviderProfileRequest,
-    CreateSessionRequest, ErrorResponse, Knowledge, ListSessionsQuery, MessageRole,
+    CreateAgentRequest, CreateProviderProfileRequest,
+    CreateSessionRequest, CreateSpeedwagonRequest, ErrorResponse, ListSessionsQuery, MessageRole,
     ProviderProfile, ProviderProfileResponse, Session, SessionMessage, SourceResponse, SourceType,
-    UpdateAgentRequest, UpdateKnowledgeRequest, UpdateProviderProfileRequest, UpdateSessionRequest,
+    SpeedwagonIndexStatus, SpeedwagonResponse,
+    UpdateAgentRequest, UpdateProviderProfileRequest, UpdateSessionRequest, UpdateSpeedwagonRequest,
 };
 use crate::repository::RepositoryError;
+use crate::services::session as session_service;
+use crate::services::speedwagon as speedwagon_service;
 use crate::state::AppState;
 
 #[derive(Serialize, ToSchema)]
@@ -50,11 +53,12 @@ struct HealthResponse {
         list_sources,
         get_source,
         delete_source,
-        create_knowledge,
-        list_knowledges,
-        get_knowledge,
-        update_knowledge,
-        delete_knowledge
+        create_speedwagon,
+        list_speedwagons,
+        get_speedwagon,
+        update_speedwagon,
+        delete_speedwagon,
+        index_speedwagon,
     ),
     components(
         schemas(
@@ -75,9 +79,10 @@ struct HealthResponse {
             AddSessionMessageResponse,
             SourceResponse,
             SourceType,
-            Knowledge,
-            CreateKnowledgeRequest,
-            UpdateKnowledgeRequest,
+            SpeedwagonResponse,
+            SpeedwagonIndexStatus,
+            CreateSpeedwagonRequest,
+            UpdateSpeedwagonRequest,
             crate::agent::spec::AgentSpec,
             crate::agent::spec::LangModelAPISchema,
             crate::agent::spec::LangModelProvider,
@@ -92,7 +97,7 @@ struct HealthResponse {
         (name = "provider_profiles", description = "Provider profile endpoints"),
         (name = "sessions", description = "Session endpoints"),
         (name = "sources", description = "Source endpoints"),
-        (name = "knowledges", description = "Knowledge endpoints")
+        (name = "speedwagons", description = "Speedwagon endpoints")
     )
 )]
 pub struct ApiDoc;
@@ -144,15 +149,19 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
                 .route(web::delete().to(delete_source)),
         )
         .service(
-            web::resource("/knowledges")
-                .route(web::get().to(list_knowledges))
-                .route(web::post().to(create_knowledge)),
+            web::resource("/speedwagons")
+                .route(web::get().to(list_speedwagons))
+                .route(web::post().to(create_speedwagon)),
         )
         .service(
-            web::resource("/knowledges/{id}")
-                .route(web::get().to(get_knowledge))
-                .route(web::put().to(update_knowledge))
-                .route(web::delete().to(delete_knowledge)),
+            web::resource("/speedwagons/{id}")
+                .route(web::get().to(get_speedwagon))
+                .route(web::put().to(update_speedwagon))
+                .route(web::delete().to(delete_speedwagon)),
+        )
+        .service(
+            web::resource("/speedwagons/{id}/index")
+                .route(web::post().to(index_speedwagon)),
         );
 }
 
@@ -448,33 +457,9 @@ async fn delete_provider_profile(
 async fn create_session(
     state: web::Data<AppState>,
     payload: web::Json<CreateSessionRequest>,
-) -> HttpResponse {
-    let CreateSessionRequest {
-        agent_id,
-        provider_profile_id,
-        title,
-    } = payload.into_inner();
-
-    match state.repository.get_agent(agent_id).await {
-        Ok(Some(_)) => {}
-        Ok(None) => return json_error(StatusCode::NOT_FOUND, "agent not found"),
-        Err(error) => return repository_error_response(error),
-    }
-
-    let resolved_provider_profile_id =
-        match resolve_provider_profile_id(&state, provider_profile_id).await {
-            Ok(provider_profile_id) => provider_profile_id,
-            Err(response) => return response,
-        };
-
-    match state
-        .repository
-        .create_session(agent_id, resolved_provider_profile_id, title)
-        .await
-    {
-        Ok(session) => HttpResponse::Created().json(session),
-        Err(error) => repository_error_response(error),
-    }
+) -> Result<HttpResponse, session_service::SessionError> {
+    let session = session_service::create_session(&state, payload.into_inner()).await?;
+    Ok(HttpResponse::Created().json(session))
 }
 
 #[utoipa::path(
@@ -538,48 +523,10 @@ async fn update_session(
     state: web::Data<AppState>,
     path: web::Path<Uuid>,
     payload: web::Json<UpdateSessionRequest>,
-) -> HttpResponse {
+) -> Result<HttpResponse, session_service::SessionError> {
     let id = path.into_inner();
-    let req = payload.into_inner();
-
-    // Verify session exists first
-    match state.repository.get_session(id).await {
-        Ok(None) => return json_error(StatusCode::NOT_FOUND, "session not found"),
-        Err(error) => return repository_error_response(error),
-        Ok(Some(_)) => {}
-    }
-
-    if let Some(title) = req.title {
-        if let Err(error) = state.repository.update_session_title(id, title).await {
-            return repository_error_response(error);
-        }
-    }
-
-    if let Some(provider_profile_id) = req.provider_profile_id {
-        // Verify provider profile exists
-        match state.repository.get_provider_profile(provider_profile_id).await {
-            Ok(None) => {
-                return json_error(StatusCode::NOT_FOUND, "provider profile not found");
-            }
-            Err(error) => return repository_error_response(error),
-            Ok(Some(_)) => {}
-        }
-
-        if let Err(error) = state
-            .repository
-            .update_session_provider_profile_id(id, provider_profile_id)
-            .await
-        {
-            return repository_error_response(error);
-        }
-        state.invalidate_session_runtime(id);
-    }
-
-    match state.repository.get_session(id).await {
-        Ok(Some(session)) => HttpResponse::Ok().json(session),
-        Ok(None) => json_error(StatusCode::NOT_FOUND, "session not found"),
-        Err(error) => repository_error_response(error),
-    }
+    let session = session_service::update_session(&state, id, payload.into_inner()).await?;
+    Ok(HttpResponse::Ok().json(session))
 }
 
 #[utoipa::path(
@@ -592,17 +539,13 @@ async fn update_session(
         (status = 404, description = "Session not found", body = ErrorResponse)
     )
 )]
-async fn delete_session(state: web::Data<AppState>, path: web::Path<Uuid>) -> HttpResponse {
+async fn delete_session(
+    state: web::Data<AppState>,
+    path: web::Path<Uuid>,
+) -> Result<HttpResponse, session_service::SessionError> {
     let id = path.into_inner();
-
-    match state.repository.delete_session(id).await {
-        Ok(true) => {
-            state.invalidate_session_runtime(id);
-            HttpResponse::NoContent().finish()
-        }
-        Ok(false) => json_error(StatusCode::NOT_FOUND, "session not found"),
-        Err(error) => repository_error_response(error),
-    }
+    session_service::delete_session(&state, id).await?;
+    Ok(HttpResponse::NoContent().finish())
 }
 
 #[utoipa::path(
@@ -622,77 +565,11 @@ async fn add_message(
     state: web::Data<AppState>,
     path: web::Path<Uuid>,
     payload: web::Json<AddSessionMessageRequest>,
-) -> HttpResponse {
+) -> Result<HttpResponse, session_service::SessionError> {
     let id = path.into_inner();
     let AddSessionMessageRequest { role, content } = payload.into_inner();
-
-    if content.trim().is_empty() {
-        return json_error(StatusCode::BAD_REQUEST, "message content is empty");
-    }
-
-    let session = match state
-        .repository
-        .add_session_message(id, role.clone(), content.clone())
-        .await
-    {
-        Ok(Some(session)) => session,
-        Ok(None) => return json_error(StatusCode::NOT_FOUND, "session not found"),
-        Err(error) => return repository_error_response(error),
-    };
-
-    if !matches!(role, MessageRole::User) {
-        return HttpResponse::Ok().json(AddSessionMessageResponse {
-            assistant_message: None,
-        });
-    }
-
-    let runtime = match state.get_or_create_runtime_for_session(&session).await {
-        Ok(runtime) => runtime,
-        Err(error) => {
-            eprintln!("runtime initialization error: {error}");
-            return json_error(
-                StatusCode::BAD_GATEWAY,
-                "failed to initialize agent runtime",
-            );
-        }
-    };
-
-    let runtime_output = {
-        let mut runtime = runtime.lock().await;
-        runtime.run_user_text(content).await
-    };
-
-    let assistant_text = match runtime_output {
-        Ok(text) => text,
-        Err(ChatAgentRunError::NoTextContent) => {
-            return json_error(
-                StatusCode::BAD_GATEWAY,
-                "model response did not include text content",
-            );
-        }
-        Err(ChatAgentRunError::Runtime { source }) => {
-            eprintln!("runtime execution error: {source}");
-            return json_error(StatusCode::BAD_GATEWAY, "failed to run language model");
-        }
-    };
-
-    match state
-        .repository
-        .add_session_message(id, MessageRole::Assistant, assistant_text)
-        .await
-    {
-        Ok(Some(updated_session)) => {
-            let assistant_message = updated_session
-                .messages
-                .last()
-                .cloned()
-                .filter(|message| matches!(message.role, MessageRole::Assistant));
-
-            HttpResponse::Ok().json(AddSessionMessageResponse { assistant_message })
-        }
-        Ok(None) => json_error(StatusCode::NOT_FOUND, "session not found"),
-        Err(error) => repository_error_response(error),
-    }
+    let response = session_service::send_message(&state, id, role, content).await?;
+    Ok(HttpResponse::Ok().json(response))
 }
 
 // ===================== Source Handlers =====================
@@ -733,7 +610,7 @@ async fn upload_source(
 
     let size = file_bytes.len() as i64;
 
-    // Build stored filename: {original}-{timestamp}.{ext}
+    // Construct stored filename: {original}-{timestamp}.{ext}
     let timestamp = chrono::Utc::now().timestamp_millis();
     let stored_name = if let Some(dot_pos) = file_name.rfind('.') {
         let (stem, ext) = file_name.split_at(dot_pos);
@@ -825,11 +702,29 @@ async fn delete_source(state: web::Data<AppState>, path: web::Path<Uuid>) -> Htt
     match state.repository.delete_source(id).await {
         Ok(true) => {
             // Delete file from disk
-            if let Some(path) = file_path {
-                if let Err(error) = tokio::fs::remove_file(&path).await {
+            if let Some(path) = &file_path {
+                if let Err(error) = tokio::fs::remove_file(path).await {
                     eprintln!("failed to delete file {path}: {error}");
                 }
             }
+
+            // Reset index_status for any speedwagons that referenced this source
+            if let Ok(speedwagons) = state.repository.list_speedwagons().await {
+                for sw in speedwagons {
+                    if sw.source_ids.contains(&id) && sw.index_status != SpeedwagonIndexStatus::NotIndexed {
+                        let _ = state.repository.update_speedwagon_index_status(
+                            sw.id,
+                            SpeedwagonIndexStatus::NotIndexed,
+                            None,
+                            None,
+                            None,
+                            None,
+                            None,
+                        ).await;
+                    }
+                }
+            }
+
             HttpResponse::NoContent().finish()
         }
         Ok(false) => json_error(StatusCode::NOT_FOUND, "source not found"),
@@ -837,183 +732,133 @@ async fn delete_source(state: web::Data<AppState>, path: web::Path<Uuid>) -> Htt
     }
 }
 
-// ===================== Knowledge Handlers =====================
+// ===================== Speedwagon Handlers =====================
 
 #[utoipa::path(
     post,
-    path = "/knowledges",
-    tag = "knowledges",
-    request_body = CreateKnowledgeRequest,
-    responses((status = 201, description = "Created knowledge", body = Knowledge))
+    path = "/speedwagons",
+    tag = "speedwagons",
+    request_body = CreateSpeedwagonRequest,
+    responses((status = 201, description = "Created speedwagon", body = SpeedwagonResponse))
 )]
-async fn create_knowledge(
+async fn create_speedwagon(
     state: web::Data<AppState>,
-    payload: web::Json<CreateKnowledgeRequest>,
-) -> HttpResponse {
-    let CreateKnowledgeRequest {
-        name,
-        description,
-        source_ids,
-    } = payload.into_inner();
-
-    if name.trim().is_empty() {
-        return json_error(StatusCode::BAD_REQUEST, "knowledge name is empty");
-    }
-
-    match state
-        .repository
-        .create_knowledge(name, description, source_ids)
-        .await
-    {
-        Ok(knowledge) => HttpResponse::Created().json(knowledge),
-        Err(error) => repository_error_response(error),
-    }
+    payload: web::Json<CreateSpeedwagonRequest>,
+) -> Result<HttpResponse, speedwagon_service::SpeedwagonError> {
+    let sw = speedwagon_service::create_speedwagon(&state, payload.into_inner()).await?;
+    Ok(HttpResponse::Created().json(SpeedwagonResponse::from(&sw)))
 }
 
 #[utoipa::path(
     get,
-    path = "/knowledges",
-    tag = "knowledges",
-    responses((status = 200, description = "List knowledges", body = [Knowledge]))
+    path = "/speedwagons",
+    tag = "speedwagons",
+    responses((status = 200, description = "List speedwagons", body = [SpeedwagonResponse]))
 )]
-async fn list_knowledges(state: web::Data<AppState>) -> HttpResponse {
-    match state.repository.list_knowledges().await {
-        Ok(knowledges) => HttpResponse::Ok().json(knowledges),
+async fn list_speedwagons(state: web::Data<AppState>) -> HttpResponse {
+    match state.repository.list_speedwagons().await {
+        Ok(list) => {
+            let response: Vec<SpeedwagonResponse> = list.iter().map(SpeedwagonResponse::from).collect();
+            HttpResponse::Ok().json(response)
+        }
         Err(error) => repository_error_response(error),
     }
 }
 
 #[utoipa::path(
     get,
-    path = "/knowledges/{id}",
-    tag = "knowledges",
-    params(("id" = Uuid, Path, description = "Knowledge ID")),
+    path = "/speedwagons/{id}",
+    tag = "speedwagons",
+    params(("id" = Uuid, Path, description = "Speedwagon ID")),
     responses(
-        (status = 200, description = "Knowledge", body = Knowledge),
-        (status = 404, description = "Knowledge not found", body = ErrorResponse)
+        (status = 200, description = "Speedwagon", body = SpeedwagonResponse),
+        (status = 404, description = "Not found", body = ErrorResponse)
     )
 )]
-async fn get_knowledge(state: web::Data<AppState>, path: web::Path<Uuid>) -> HttpResponse {
+async fn get_speedwagon(state: web::Data<AppState>, path: web::Path<Uuid>) -> HttpResponse {
     let id = path.into_inner();
-
-    match state.repository.get_knowledge(id).await {
-        Ok(Some(knowledge)) => HttpResponse::Ok().json(knowledge),
-        Ok(None) => json_error(StatusCode::NOT_FOUND, "knowledge not found"),
+    match state.repository.get_speedwagon(id).await {
+        Ok(Some(sw)) => HttpResponse::Ok().json(SpeedwagonResponse::from(&sw)),
+        Ok(None) => json_error(StatusCode::NOT_FOUND, "speedwagon not found"),
         Err(error) => repository_error_response(error),
     }
 }
 
 #[utoipa::path(
     put,
-    path = "/knowledges/{id}",
-    tag = "knowledges",
-    params(("id" = Uuid, Path, description = "Knowledge ID")),
-    request_body = UpdateKnowledgeRequest,
+    path = "/speedwagons/{id}",
+    tag = "speedwagons",
+    params(("id" = Uuid, Path, description = "Speedwagon ID")),
+    request_body = UpdateSpeedwagonRequest,
     responses(
-        (status = 200, description = "Updated knowledge", body = Knowledge),
-        (status = 404, description = "Knowledge not found", body = ErrorResponse)
+        (status = 200, description = "Updated speedwagon", body = SpeedwagonResponse),
+        (status = 404, description = "Not found", body = ErrorResponse)
     )
 )]
-async fn update_knowledge(
+async fn update_speedwagon(
     state: web::Data<AppState>,
     path: web::Path<Uuid>,
-    payload: web::Json<UpdateKnowledgeRequest>,
-) -> HttpResponse {
+    payload: web::Json<UpdateSpeedwagonRequest>,
+) -> Result<HttpResponse, speedwagon_service::SpeedwagonError> {
     let id = path.into_inner();
-    let UpdateKnowledgeRequest {
-        name,
-        description,
-        source_ids,
-    } = payload.into_inner();
-
-    if name.trim().is_empty() {
-        return json_error(StatusCode::BAD_REQUEST, "knowledge name is empty");
-    }
-
-    match state
-        .repository
-        .update_knowledge(id, name, description, source_ids)
-        .await
-    {
-        Ok(Some(knowledge)) => HttpResponse::Ok().json(knowledge),
-        Ok(None) => json_error(StatusCode::NOT_FOUND, "knowledge not found"),
-        Err(error) => repository_error_response(error),
-    }
+    let sw = speedwagon_service::update_speedwagon(&state, id, payload.into_inner()).await?;
+    Ok(HttpResponse::Ok().json(SpeedwagonResponse::from(&sw)))
 }
 
 #[utoipa::path(
     delete,
-    path = "/knowledges/{id}",
-    tag = "knowledges",
-    params(("id" = Uuid, Path, description = "Knowledge ID")),
+    path = "/speedwagons/{id}",
+    tag = "speedwagons",
+    params(("id" = Uuid, Path, description = "Speedwagon ID")),
     responses(
-        (status = 204, description = "Knowledge deleted"),
-        (status = 404, description = "Knowledge not found", body = ErrorResponse)
+        (status = 204, description = "Deleted"),
+        (status = 404, description = "Not found", body = ErrorResponse)
     )
 )]
-async fn delete_knowledge(state: web::Data<AppState>, path: web::Path<Uuid>) -> HttpResponse {
+async fn delete_speedwagon(
+    state: web::Data<AppState>,
+    path: web::Path<Uuid>,
+) -> Result<HttpResponse, speedwagon_service::SpeedwagonError> {
+    let id = path.into_inner();
+    speedwagon_service::delete_speedwagon(&state, id).await?;
+    Ok(HttpResponse::NoContent().finish())
+}
+
+#[utoipa::path(
+    post,
+    path = "/speedwagons/{id}/index",
+    tag = "speedwagons",
+    params(("id" = Uuid, Path, description = "Speedwagon ID")),
+    responses(
+        (status = 202, description = "Indexing started"),
+        (status = 404, description = "Not found", body = ErrorResponse),
+        (status = 409, description = "Already indexing", body = ErrorResponse),
+        (status = 422, description = "No sources", body = ErrorResponse)
+    )
+)]
+async fn index_speedwagon(
+    state: web::Data<AppState>,
+    path: web::Path<Uuid>,
+) -> Result<HttpResponse, speedwagon_service::SpeedwagonError> {
     let id = path.into_inner();
 
-    match state.repository.delete_knowledge(id).await {
-        Ok(true) => HttpResponse::NoContent().finish(),
-        Ok(false) => json_error(StatusCode::NOT_FOUND, "knowledge not found"),
-        Err(error) => repository_error_response(error),
-    }
-}
+    let sw = speedwagon_service::start_indexing(&state, id).await?;
 
-async fn resolve_provider_profile_id(
-    state: &web::Data<AppState>,
-    requested_provider_profile_id: Option<Uuid>,
-) -> Result<Uuid, HttpResponse> {
-    if let Some(provider_profile_id) = requested_provider_profile_id {
-        return match state
-            .repository
-            .get_provider_profile(provider_profile_id)
-            .await
-        {
-            Ok(Some(_)) => Ok(provider_profile_id),
-            Ok(None) => Err(json_error(
-                StatusCode::NOT_FOUND,
-                "provider profile not found",
-            )),
-            Err(error) => Err(repository_error_response(error)),
-        };
-    }
+    let repository = Arc::clone(&state.repository);
+    let speedwagon_data_dir = state.speedwagon_data_dir.clone();
+    let state_clone = state.clone();
 
-    let profiles = state
-        .repository
-        .list_provider_profiles()
-        .await
-        .map_err(repository_error_response)?;
+    tokio::task::spawn(async move {
+        let _ = crate::services::indexing::start_indexing(
+            repository,
+            state_clone,
+            speedwagon_data_dir,
+            sw,
+        )
+        .await;
+    });
 
-    let Some(profile) = profiles
-        .iter()
-        .filter(|profile| profile.is_default)
-        .min_by(|a, b| {
-            provider_priority(&a.provider)
-                .cmp(&provider_priority(&b.provider))
-                .then_with(|| a.created_at.cmp(&b.created_at))
-                .then_with(|| a.id.cmp(&b.id))
-        })
-    else {
-        return Err(json_error(
-            StatusCode::BAD_REQUEST,
-            "no default provider profile available",
-        ));
-    };
-
-    Ok(profile.id)
-}
-
-fn provider_priority(provider: &AgentProvider) -> u8 {
-    match &provider.lm {
-        LangModelProvider::API { schema, .. } => match schema {
-            LangModelAPISchema::ChatCompletion => 0,
-            LangModelAPISchema::Anthropic => 1,
-            LangModelAPISchema::Gemini => 2,
-            LangModelAPISchema::OpenAI => 3,
-        },
-    }
+    Ok(HttpResponse::Accepted().finish())
 }
 
 fn to_agent_response(agent: &Agent) -> AgentResponse {
@@ -1948,10 +1793,10 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::NOT_FOUND);
     }
 
-    // ===================== Knowledge Tests =====================
+    // ===================== Speedwagon Tests =====================
 
     #[actix_web::test]
-    async fn knowledge_crud() {
+    async fn speedwagon_crud() {
         let temp_dir = TempDir::new().expect("temp dir should be created");
         let database_url = test_database_url(&temp_dir);
         let state = web::Data::new(
@@ -1961,9 +1806,9 @@ mod tests {
         );
         let app = test::init_service(App::new().app_data(state).configure(configure)).await;
 
-        // Create knowledge
+        // Create speedwagon
         let create_req = test::TestRequest::post()
-            .uri("/knowledges")
+            .uri("/speedwagons")
             .set_json(json!({
                 "name": "마케팅 자료",
                 "description": "마케팅 전략 관련 자료",
@@ -1978,27 +1823,27 @@ mod tests {
         );
         assert_eq!(create_body["source_ids"], json!([]));
 
-        let knowledge_id = create_body["id"]
+        let speedwagon_id = create_body["id"]
             .as_str()
-            .expect("knowledge id must exist")
+            .expect("speedwagon id must exist")
             .to_string();
 
-        // List knowledges
-        let list_req = test::TestRequest::get().uri("/knowledges").to_request();
+        // List speedwagons
+        let list_req = test::TestRequest::get().uri("/speedwagons").to_request();
         let list_body: Value = test::call_and_read_body_json(&app, list_req).await;
-        let knowledges = list_body.as_array().expect("knowledges should be array");
-        assert_eq!(knowledges.len(), 1);
+        let speedwagons = list_body.as_array().expect("speedwagons should be array");
+        assert_eq!(speedwagons.len(), 1);
 
-        // Get knowledge
+        // Get speedwagon
         let get_req = test::TestRequest::get()
-            .uri(&format!("/knowledges/{knowledge_id}"))
+            .uri(&format!("/speedwagons/{speedwagon_id}"))
             .to_request();
         let get_body: Value = test::call_and_read_body_json(&app, get_req).await;
         assert_eq!(get_body["name"], Value::String("마케팅 자료".to_string()));
 
-        // Update knowledge
+        // Update speedwagon
         let update_req = test::TestRequest::put()
-            .uri(&format!("/knowledges/{knowledge_id}"))
+            .uri(&format!("/speedwagons/{speedwagon_id}"))
             .set_json(json!({
                 "name": "업데이트된 자료",
                 "description": "새로운 설명",
@@ -2015,23 +1860,23 @@ mod tests {
             Value::String("새로운 설명".to_string())
         );
 
-        // Delete knowledge
+        // Delete speedwagon
         let delete_req = test::TestRequest::delete()
-            .uri(&format!("/knowledges/{knowledge_id}"))
+            .uri(&format!("/speedwagons/{speedwagon_id}"))
             .to_request();
         let delete_resp = test::call_service(&app, delete_req).await;
         assert_eq!(delete_resp.status(), StatusCode::NO_CONTENT);
 
         // Verify deleted
         let get_after_delete = test::TestRequest::get()
-            .uri(&format!("/knowledges/{knowledge_id}"))
+            .uri(&format!("/speedwagons/{speedwagon_id}"))
             .to_request();
         let resp = test::call_service(&app, get_after_delete).await;
         assert_eq!(resp.status(), StatusCode::NOT_FOUND);
     }
 
     #[actix_web::test]
-    async fn knowledge_create_empty_name_returns_bad_request() {
+    async fn speedwagon_create_empty_name_returns_bad_request() {
         let temp_dir = TempDir::new().expect("temp dir should be created");
         let database_url = test_database_url(&temp_dir);
         let state = web::Data::new(
@@ -2042,7 +1887,7 @@ mod tests {
         let app = test::init_service(App::new().app_data(state).configure(configure)).await;
 
         let req = test::TestRequest::post()
-            .uri("/knowledges")
+            .uri("/speedwagons")
             .set_json(json!({
                 "name": "  ",
                 "description": "desc"
@@ -2053,7 +1898,7 @@ mod tests {
     }
 
     #[actix_web::test]
-    async fn knowledge_with_source_ids() {
+    async fn speedwagon_with_source_ids() {
         let temp_dir = TempDir::new().expect("temp dir should be created");
         let state = test_state_with_upload_dir(&temp_dir).await;
         let app = test::init_service(App::new().app_data(state).configure(configure)).await;
@@ -2064,9 +1909,9 @@ mod tests {
         let src1_id = src1["id"].as_str().expect("src1 id").to_string();
         let src2_id = src2["id"].as_str().expect("src2 id").to_string();
 
-        // Create knowledge with source_ids
+        // Create speedwagon with source_ids
         let create_req = test::TestRequest::post()
-            .uri("/knowledges")
+            .uri("/speedwagons")
             .set_json(json!({
                 "name": "기술 문서",
                 "description": "API 관련 자료",
@@ -2079,14 +1924,14 @@ mod tests {
             .expect("source_ids should be array");
         assert_eq!(source_ids.len(), 2);
 
-        let knowledge_id = create_body["id"]
+        let speedwagon_id = create_body["id"]
             .as_str()
-            .expect("knowledge id")
+            .expect("speedwagon id")
             .to_string();
 
         // Update: remove one source, keep the other
         let update_req = test::TestRequest::put()
-            .uri(&format!("/knowledges/{knowledge_id}"))
+            .uri(&format!("/speedwagons/{speedwagon_id}"))
             .set_json(json!({
                 "name": "기술 문서",
                 "description": "API 관련 자료",
@@ -2102,7 +1947,7 @@ mod tests {
     }
 
     #[actix_web::test]
-    async fn delete_source_cascades_to_knowledge_sources() {
+    async fn delete_source_cascades_to_speedwagon_sources() {
         let temp_dir = TempDir::new().expect("temp dir should be created");
         let state = test_state_with_upload_dir(&temp_dir).await;
         let app = test::init_service(App::new().app_data(state).configure(configure)).await;
@@ -2111,9 +1956,9 @@ mod tests {
         let src = upload_source(&app, "cascade-test.pdf", b"cascade").await;
         let src_id = src["id"].as_str().expect("source id").to_string();
 
-        // Create knowledge referencing the source
+        // Create speedwagon referencing the source
         let create_req = test::TestRequest::post()
-            .uri("/knowledges")
+            .uri("/speedwagons")
             .set_json(json!({
                 "name": "Cascade Test",
                 "description": "test",
@@ -2121,9 +1966,9 @@ mod tests {
             }))
             .to_request();
         let create_body: Value = test::call_and_read_body_json(&app, create_req).await;
-        let knowledge_id = create_body["id"]
+        let speedwagon_id = create_body["id"]
             .as_str()
-            .expect("knowledge id")
+            .expect("speedwagon id")
             .to_string();
 
         // Verify source_ids contains the source
@@ -2136,16 +1981,16 @@ mod tests {
         let delete_resp = test::call_service(&app, delete_req).await;
         assert_eq!(delete_resp.status(), StatusCode::NO_CONTENT);
 
-        // Knowledge should still exist, but source_ids should be empty (cascaded)
-        let get_knowledge = test::TestRequest::get()
-            .uri(&format!("/knowledges/{knowledge_id}"))
+        // Speedwagon should still exist, but source_ids should be empty (cascaded)
+        let get_speedwagon = test::TestRequest::get()
+            .uri(&format!("/speedwagons/{speedwagon_id}"))
             .to_request();
-        let knowledge_body: Value = test::call_and_read_body_json(&app, get_knowledge).await;
-        assert_eq!(knowledge_body["source_ids"], json!([]));
+        let speedwagon_body: Value = test::call_and_read_body_json(&app, get_speedwagon).await;
+        assert_eq!(speedwagon_body["source_ids"], json!([]));
     }
 
     #[actix_web::test]
-    async fn knowledge_not_found_returns_404() {
+    async fn speedwagon_not_found_returns_404() {
         let temp_dir = TempDir::new().expect("temp dir should be created");
         let database_url = test_database_url(&temp_dir);
         let state = web::Data::new(
@@ -2158,7 +2003,7 @@ mod tests {
         let fake_id = Uuid::new_v4();
 
         let get_req = test::TestRequest::get()
-            .uri(&format!("/knowledges/{fake_id}"))
+            .uri(&format!("/speedwagons/{fake_id}"))
             .to_request();
         assert_eq!(
             test::call_service(&app, get_req).await.status(),
@@ -2166,7 +2011,7 @@ mod tests {
         );
 
         let update_req = test::TestRequest::put()
-            .uri(&format!("/knowledges/{fake_id}"))
+            .uri(&format!("/speedwagons/{fake_id}"))
             .set_json(json!({"name": "x", "description": "y", "source_ids": []}))
             .to_request();
         assert_eq!(
@@ -2175,7 +2020,7 @@ mod tests {
         );
 
         let delete_req = test::TestRequest::delete()
-            .uri(&format!("/knowledges/{fake_id}"))
+            .uri(&format!("/speedwagons/{fake_id}"))
             .to_request();
         assert_eq!(
             test::call_service(&app, delete_req).await.status(),

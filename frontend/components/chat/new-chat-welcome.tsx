@@ -9,48 +9,32 @@ import {
   createAgent,
   createSession,
   sendMessage,
-  getKnowledges,
   ApiError,
 } from "@/lib/api";
-import type { ApiKnowledge } from "@/lib/types";
 
 export function NewChatWelcome() {
   const [message, setMessage] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [knowledges, setKnowledges] = useState<ApiKnowledge[]>([]);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   // loading state와 별도로 ref로 중복 방지 — React 비동기 state 업데이트 사이의 race condition 방어
   const creatingRef = useRef(false);
 
+  const speedwagons = useAppStore((s) => s.speedwagons);
+  const fetchSpeedwagons = useAppStore((s) => s.fetchSpeedwagons);
   const selectedProvider = useAppStore((s) => s.selectedProvider);
   const selectedModel = useAppStore((s) => s.selectedModel);
   const selectedProfileId = useAppStore((s) => s.selectedProfileId);
   const setSelectedModel = useAppStore((s) => s.setSelectedModel);
-  const pendingKnowledgeIds = useAppStore((s) => s.pendingKnowledgeIds);
-  const setPendingKnowledgeIds = useAppStore((s) => s.setPendingKnowledgeIds);
+  const pendingSpeedwagonIds = useAppStore((s) => s.pendingSpeedwagonIds);
+  const setPendingSpeedwagonIds = useAppStore((s) => s.setPendingSpeedwagonIds);
   const setActiveSession = useAppStore((s) => s.setActiveSession);
-  const updateSessionKnowledge = useAppStore((s) => s.updateSessionKnowledge);
   const bumpSessionListVersion = useAppStore((s) => s.bumpSessionListVersion);
 
   useEffect(() => {
-    getKnowledges()
-      .then(setKnowledges)
-      .catch((err) => console.warn("Failed to load knowledges:", err));
-  }, []);
-
-  useEffect(() => {
     textareaRef.current?.focus();
-  }, []);
-
-  const toggleKnowledge = (id: string) => {
-    const current = pendingKnowledgeIds;
-    if (current.includes(id)) {
-      setPendingKnowledgeIds(current.filter((k) => k !== id));
-    } else {
-      setPendingKnowledgeIds([...current, id]);
-    }
-  };
+    fetchSpeedwagons();
+  }, [fetchSpeedwagons]);
 
   const handleSubmit = async () => {
     if (!message.trim() || !selectedModel || !selectedProfileId) return;
@@ -73,12 +57,12 @@ export function NewChatWelcome() {
       const session = await createSession({
         agent_id: agent.id,
         provider_profile_id: selectedProfileId,
+        speedwagon_ids: pendingSpeedwagonIds.length > 0 ? pendingSpeedwagonIds : undefined,
       });
 
-      // Knowledge 마이그레이션
-      if (pendingKnowledgeIds.length > 0) {
-        updateSessionKnowledge(session.id, pendingKnowledgeIds);
-        setPendingKnowledgeIds([]);
+      // pendingSpeedwagonIds 초기화
+      if (pendingSpeedwagonIds.length > 0) {
+        setPendingSpeedwagonIds([]);
       }
 
       // 메시지 전송
@@ -88,13 +72,14 @@ export function NewChatWelcome() {
       bumpSessionListVersion();
       setActiveSession(session.id);
     } catch (err) {
-      creatingRef.current = false;
-      setLoading(false);
       if (err instanceof ApiError) {
         setError(err.message);
       } else {
         setError("세션 생성에 실패했습니다. Settings에서 API Key를 확인해주세요.");
       }
+    } finally {
+      creatingRef.current = false;
+      setLoading(false);
     }
   };
 
@@ -157,29 +142,44 @@ export function NewChatWelcome() {
           </div>
         </div>
 
-        {/* Knowledge 인라인 체크박스 */}
-        {knowledges.length > 0 && (
-          <div className="rounded-lg border p-4 space-y-2">
-            <span className="text-xs font-medium text-muted-foreground">
-              Knowledge
-            </span>
-            <div className="grid grid-cols-2 gap-1.5 sm:grid-cols-3">
-              {knowledges.map((kn) => (
-                <label
-                  key={kn.id}
-                  className={`flex items-center gap-2 rounded-md px-3 py-2 text-sm cursor-pointer transition-colors border ${
-                    pendingKnowledgeIds.includes(kn.id)
-                      ? "bg-primary/10 border-primary/30"
-                      : "hover:bg-accent border-transparent"
-                  }`}
-                >
-                  <Checkbox
-                    checked={pendingKnowledgeIds.includes(kn.id)}
-                    onCheckedChange={() => toggleKnowledge(kn.id)}
-                  />
-                  {kn.name}
-                </label>
-              ))}
+        {/* Speedwagon 선택 */}
+        {speedwagons.length > 0 && (
+          <div className="rounded-xl border border-input bg-background/60 px-4 py-3 space-y-2">
+            <span className="text-xs font-medium text-muted-foreground">Speedwagon</span>
+            <div className="space-y-1.5">
+              {speedwagons.map((sw) => {
+                const isBuilt = sw.index_status === "indexed";
+                const isChecked = pendingSpeedwagonIds.includes(sw.id);
+                return (
+                  <label
+                    key={sw.id}
+                    className={`flex items-center gap-2 rounded-md px-2 py-1.5 transition-colors ${
+                      isBuilt
+                        ? "cursor-pointer hover:bg-accent"
+                        : "opacity-50 cursor-not-allowed"
+                    } ${isChecked && isBuilt ? "bg-primary/10" : ""}`}
+                    title={!isBuilt ? "인덱싱 후 사용 가능합니다" : undefined}
+                  >
+                    <Checkbox
+                      checked={isChecked}
+                      disabled={!isBuilt}
+                      onCheckedChange={() => {
+                        if (!isBuilt) return;
+                        const updated = isChecked
+                          ? pendingSpeedwagonIds.filter((id) => id !== sw.id)
+                          : [...pendingSpeedwagonIds, sw.id];
+                        setPendingSpeedwagonIds(updated);
+                      }}
+                    />
+                    <span className="text-sm flex-1 truncate">{sw.name}</span>
+                    {!isBuilt && (
+                      <span className="text-xs text-muted-foreground">
+                        ({sw.index_status === "indexing" ? "인덱싱 중" : "인덱싱 필요"})
+                      </span>
+                    )}
+                  </label>
+                );
+              })}
             </div>
           </div>
         )}
