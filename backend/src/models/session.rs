@@ -1,7 +1,11 @@
+use std::collections::HashMap;
+
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 use uuid::Uuid;
+
+// --- Enums ---
 
 #[derive(Clone, Debug, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
@@ -11,6 +15,8 @@ pub enum MessageRole {
     Assistant,
     Tool,
 }
+
+// --- Domain Models ---
 
 #[derive(Clone, Debug, Serialize, Deserialize, ToSchema)]
 pub struct SessionMessage {
@@ -44,6 +50,8 @@ pub struct Session {
     pub updated_at: DateTime<Utc>,
 }
 
+// --- Response DTOs ---
+
 /// API response for GET /sessions (list) and POST /sessions (create) -- no messages
 #[derive(Clone, Debug, Serialize, Deserialize, ToSchema)]
 pub struct SessionResponse {
@@ -72,20 +80,6 @@ impl From<&Session> for SessionResponse {
     }
 }
 
-/// API response for GET /sessions/{id} -- includes messages with tool calls
-#[derive(Clone, Debug, Serialize, Deserialize, ToSchema)]
-pub struct SessionDetailResponse {
-    pub id: Uuid,
-    pub agent_id: Uuid,
-    pub provider_profile_id: Uuid,
-    pub title: Option<String>,
-    pub messages: Vec<SessionMessageResponse>,
-    pub speedwagon_ids: Vec<Uuid>,
-    pub source_ids: Vec<Uuid>,
-    pub created_at: DateTime<Utc>,
-    pub updated_at: DateTime<Utc>,
-}
-
 /// API response message -- includes tool calls (only populated in GET /sessions/{id})
 #[derive(Clone, Debug, Serialize, Deserialize, ToSchema)]
 pub struct SessionMessageResponse {
@@ -109,6 +103,58 @@ impl From<SessionMessage> for SessionMessageResponse {
     }
 }
 
+/// API response for GET /sessions/{id} -- includes messages with tool calls
+#[derive(Clone, Debug, Serialize, Deserialize, ToSchema)]
+pub struct SessionDetailResponse {
+    pub id: Uuid,
+    pub agent_id: Uuid,
+    pub provider_profile_id: Uuid,
+    pub title: Option<String>,
+    pub messages: Vec<SessionMessageResponse>,
+    pub speedwagon_ids: Vec<Uuid>,
+    pub source_ids: Vec<Uuid>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+impl From<(Session, Vec<SessionToolCall>)> for SessionDetailResponse {
+    fn from((session, tool_calls): (Session, Vec<SessionToolCall>)) -> Self {
+        let mut tc_map: HashMap<String, Vec<SessionToolCall>> = HashMap::new();
+        for tc in tool_calls {
+            tc_map.entry(tc.message_id.clone()).or_default().push(tc);
+        }
+        let messages = session
+            .messages
+            .into_iter()
+            .map(|m| {
+                let msg_id = m.id.clone();
+                let mut resp = SessionMessageResponse::from(m);
+                resp.tool_calls = tc_map.remove(&msg_id).unwrap_or_default();
+                resp
+            })
+            .collect();
+        Self {
+            id: session.id,
+            agent_id: session.agent_id,
+            provider_profile_id: session.provider_profile_id,
+            title: session.title,
+            messages,
+            speedwagon_ids: session.speedwagon_ids,
+            source_ids: session.source_ids,
+            created_at: session.created_at,
+            updated_at: session.updated_at,
+        }
+    }
+}
+
+// --- Request DTOs ---
+
+#[derive(Debug, Deserialize)]
+pub struct ListSessionsQuery {
+    pub agent_id: Option<Uuid>,
+    pub include_messages: Option<bool>,
+}
+
 #[derive(Debug, Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct CreateSessionRequest {
@@ -119,12 +165,6 @@ pub struct CreateSessionRequest {
     pub speedwagon_ids: Vec<Uuid>,
     #[serde(default)]
     pub source_ids: Vec<Uuid>,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct ListSessionsQuery {
-    pub agent_id: Option<Uuid>,
-    pub include_messages: Option<bool>,
 }
 
 #[derive(Debug, Deserialize, ToSchema)]

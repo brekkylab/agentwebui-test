@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use actix_multipart::Multipart;
 use actix_web::http::StatusCode;
-use actix_web::{HttpResponse, web};
+use actix_web::{HttpResponse, ResponseError, web};
 use futures_util::StreamExt;
 use serde::Serialize;
 use utoipa::{OpenApi, ToSchema};
@@ -516,53 +516,10 @@ async fn list_sessions(
 )]
 async fn get_session(state: web::Data<AppState>, path: web::Path<Uuid>) -> HttpResponse {
     let id = path.into_inner();
-
-    match state.repository.get_session(id).await {
-        Ok(Some(session)) => {
-            // Load tool calls and attach to messages
-            let tool_calls = state
-                .repository
-                .get_tool_calls_for_session(id)
-                .await
-                .unwrap_or_default();
-
-            let tc_map = {
-                let mut map: std::collections::HashMap<String, Vec<SessionToolCall>> =
-                    std::collections::HashMap::new();
-                for tc in tool_calls {
-                    map.entry(tc.message_id.clone()).or_default().push(tc);
-                }
-                map
-            };
-
-            let messages: Vec<SessionMessageResponse> = session
-                .messages
-                .into_iter()
-                .map(|m| {
-                    let msg_id = m.id.clone();
-                    let mut resp = SessionMessageResponse::from(m);
-                    if let Some(tcs) = tc_map.get(&msg_id) {
-                        resp.tool_calls = tcs.clone();
-                    }
-                    resp
-                })
-                .collect();
-
-            let detail = SessionDetailResponse {
-                id: session.id,
-                agent_id: session.agent_id,
-                provider_profile_id: session.provider_profile_id,
-                title: session.title,
-                messages,
-                speedwagon_ids: session.speedwagon_ids,
-                source_ids: session.source_ids,
-                created_at: session.created_at,
-                updated_at: session.updated_at,
-            };
-            HttpResponse::Ok().json(detail)
-        }
+    match session_service::get_session_detail(&state, id).await {
+        Ok(Some(detail)) => HttpResponse::Ok().json(detail),
         Ok(None) => json_error(StatusCode::NOT_FOUND, "session not found"),
-        Err(error) => repository_error_response(error),
+        Err(error) => error.error_response(),
     }
 }
 

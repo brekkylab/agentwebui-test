@@ -6,6 +6,8 @@ use uuid::Uuid;
 
 use crate::agent::spec::AgentProvider;
 
+// --- Domain Models ---
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ProviderProfile {
     pub id: Uuid,
@@ -16,6 +18,8 @@ pub struct ProviderProfile {
     pub updated_at: DateTime<Utc>,
 }
 
+// --- Response DTOs ---
+
 #[derive(Clone, Debug, Serialize, ToSchema)]
 pub struct ProviderProfileResponse {
     pub id: Uuid,
@@ -25,6 +29,8 @@ pub struct ProviderProfileResponse {
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
+
+// --- Request DTOs ---
 
 #[derive(Debug, Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]

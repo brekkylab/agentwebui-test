@@ -3,6 +3,8 @@ use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 use uuid::Uuid;
 
+// --- Enums ---
+
 #[derive(Clone, Debug, Serialize, Deserialize, ToSchema, PartialEq)]
 #[serde(rename_all = "snake_case")]
 pub enum SpeedwagonIndexStatus {
@@ -11,6 +13,8 @@ pub enum SpeedwagonIndexStatus {
     Indexed,
     Error,
 }
+
+// --- Domain Models ---
 
 #[derive(Clone, Debug, Serialize, Deserialize, ToSchema)]
 pub struct Speedwagon {
@@ -29,6 +33,8 @@ pub struct Speedwagon {
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
+
+// --- Response DTOs ---
 
 #[derive(Debug, Serialize, ToSchema)]
 pub struct SpeedwagonResponse {
@@ -68,6 +74,8 @@ impl From<&Speedwagon> for SpeedwagonResponse {
         }
     }
 }
+
+// --- Request DTOs ---
 
 #[derive(Debug, Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]

@@ -9,7 +9,7 @@ use uuid::Uuid;
 
 use crate::models::{
     CreateSessionRequest, ErrorResponse, MessageRole, Session,
-    SessionMessage, SessionToolCall, UpdateSessionRequest,
+    SessionDetailResponse, SessionMessage, SessionToolCall, UpdateSessionRequest,
 };
 use crate::repository::RepositoryError;
 use crate::state::AppState;
@@ -54,6 +54,22 @@ impl ResponseError for SessionError {
             error: self.to_string(),
         })
     }
+}
+
+/// Load a session with its messages and attached tool calls, assembled into SessionDetailResponse.
+pub async fn get_session_detail(
+    state: &AppState,
+    id: Uuid,
+) -> Result<Option<SessionDetailResponse>, SessionError> {
+    let Some(session) = state.repository.get_session(id).await? else {
+        return Ok(None);
+    };
+    let tool_calls = state
+        .repository
+        .get_tool_calls_for_session(id)
+        .await
+        .unwrap_or_default();
+    Ok(Some(SessionDetailResponse::from((session, tool_calls))))
 }
 
 /// Create a new session after verifying the agent exists and resolving the provider profile.

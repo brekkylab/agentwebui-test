@@ -3,11 +3,15 @@ use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 use uuid::Uuid;
 
+// --- Enums ---
+
 #[derive(Clone, Debug, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum SourceType {
     LocalFile,
 }
+
+// --- Domain Models ---
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Source {
@@ -19,6 +23,8 @@ pub struct Source {
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
+
+// --- Response DTOs ---
 
 #[derive(Clone, Debug, Serialize, ToSchema)]
 pub struct SourceResponse {
