@@ -307,17 +307,17 @@ export function SpeedwagonDetail({ id }: Props) {
         </div>
       </div>
 
-      {/* Instruction */}
+      {/* Instruction — merged with default RAG prompt as <additional_instructions> */}
       <div className="space-y-1.5">
-        <label className="text-sm font-medium">서브에이전트 시스템 프롬프트</label>
+        <label className="text-sm font-medium">서브에이전트 추가 지시</label>
         <p className="text-xs text-muted-foreground">
-          비워두면 기본 시스템 프롬프트를 사용합니다.
+          기본 RAG 프롬프트에 추가됩니다. 비워두면 기본 프롬프트만 사용합니다.
         </p>
         <textarea
           className="w-full rounded-md border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring min-h-[100px] resize-y"
           value={instruction}
           onChange={(e) => handleInstructionChange(e.target.value)}
-          placeholder="You are a helpful assistant specialized in..."
+          placeholder="예: 한국어로 답변해주세요, 출처를 반드시 포함해주세요..."
         />
       </div>
 

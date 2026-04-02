@@ -1,6 +1,7 @@
 mod agent;
 mod handlers;
 mod models;
+mod prompt;
 mod repository;
 mod services;
 mod state;

@@ -8,7 +8,8 @@ use tokio::sync::Mutex as TokioMutex;
 use url::Url;
 use uuid::Uuid;
 
-use crate::models::{Session, SpeedwagonIndexStatus};
+use crate::models::{MessageRole, Session, SpeedwagonIndexStatus};
+use crate::prompt::build_system_prompt;
 use crate::repository::{
     Repository, RepositoryError, RepositoryResult, create_repository_from_env,
 };
@@ -155,12 +156,55 @@ impl AppState {
             }
         }
 
+        // Build assembled system prompt from 4 layers (Base + User + Dynamic Context + Reminder)
+        let assembled_instruction = build_system_prompt(
+            agent.spec.instruction.as_deref(),
+            &kb_entries,
+        );
+
+        // Override spec.instruction with assembled prompt before ChatAgent creation.
+        // DB stores raw user text (Layer ②); runtime receives assembled 4-layer prompt.
+        tracing::debug!(
+            session_id = %session.id,
+            user_instruction = ?agent.spec.instruction,
+            assembled_len = assembled_instruction.len(),
+            kb_count = kb_entries.len(),
+            "\n=== Assembled System Prompt ===\n{}\n=== End System Prompt ===",
+            assembled_instruction
+        );
+        let mut spec = agent.spec;
+        spec.instruction = Some(assembled_instruction.clone());
+
         let runtime = Arc::new(TokioMutex::new(ChatAgent::new(
-            agent.spec,
+            spec,
             provider_profile.provider,
             kb_entries,
             session_source_paths,
         )));
+
+        // Restore conversation history from DB (last 20 turns = 40 user/assistant messages)
+        let recent_messages: Vec<(String, String)> = session.messages.iter()
+            .filter(|m| matches!(m.role, MessageRole::User | MessageRole::Assistant))
+            .rev()
+            .take(40)
+            .collect::<Vec<_>>()
+            .into_iter()
+            .rev()
+            .map(|m| {
+                let role_str = match m.role {
+                    MessageRole::User => "user",
+                    MessageRole::Assistant => "assistant",
+                    _ => unreachable!("filtered to user/assistant above"),
+                };
+                (role_str.to_string(), m.content.clone())
+            })
+            .collect();
+
+        if !recent_messages.is_empty() {
+            let mut rt = runtime.lock().await;
+            rt.restore_history(assembled_instruction.clone(), recent_messages);
+            drop(rt);
+        }
 
         let cached = CachedRuntime {
             agent_id: session.agent_id,

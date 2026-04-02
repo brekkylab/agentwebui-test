@@ -136,10 +136,14 @@ pub async fn dispatch_speedwagon(
     let agent_config = AgentConfig {
         api_key: provider.api_key.clone(),
         api_url: provider.api_url.clone(),
-        system_prompt: entry
-            .instruction
-            .clone()
-            .unwrap_or(default_config.system_prompt),
+        system_prompt: match &entry.instruction {
+            Some(custom) if !custom.trim().is_empty() => format!(
+                "{}\n\n<additional_instructions>\n{}\n</additional_instructions>",
+                default_config.system_prompt,
+                custom.trim()
+            ),
+            _ => default_config.system_prompt,
+        },
         model_name: entry
             .lm
             .clone()

@@ -267,8 +267,9 @@ pub async fn send_message_streaming(
             }
         }
 
-        // Drop the lock before DB operations
+        // Trim history to 20 turns after streaming completes
         drop(event_stream);
+        rt.trim_history();
         drop(rt);
 
         // Save assistant message + tool calls to DB
