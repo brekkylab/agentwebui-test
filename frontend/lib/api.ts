@@ -224,7 +224,7 @@ export async function* sendMessageStream(
   const response = await fetch(`${API_BASE_URL}/sessions/${sessionId}/messages/stream`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ role: "user", content }),
+    body: JSON.stringify({ content }),
     signal: AbortSignal.timeout(120_000),
   });
 
