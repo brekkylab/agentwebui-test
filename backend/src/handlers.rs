@@ -17,8 +17,9 @@ use crate::models::{
     AddSessionMessageRequest, Agent, AgentResponse,
     CreateAgentRequest, CreateProviderProfileRequest,
     CreateSessionRequest, CreateSpeedwagonRequest, ErrorResponse, ListSessionsQuery, MessageRole,
-    ProviderProfile, ProviderProfileResponse, Session, SessionMessage, SourceResponse, SourceType,
-    SpeedwagonIndexStatus, SpeedwagonResponse,
+    ProviderProfile, ProviderProfileResponse, SessionDetailResponse, SessionMessageResponse,
+    SessionResponse, SourceResponse, SourceType,
+    SpeedwagonIndexStatus, SpeedwagonResponse, SessionToolCall,
     UpdateAgentRequest, UpdateProviderProfileRequest, UpdateSessionRequest, UpdateSpeedwagonRequest,
 };
 use crate::repository::RepositoryError;
@@ -73,8 +74,10 @@ struct HealthResponse {
             ProviderProfileResponse,
             CreateProviderProfileRequest,
             UpdateProviderProfileRequest,
-            Session,
-            SessionMessage,
+            SessionResponse,
+            SessionDetailResponse,
+            SessionMessageResponse,
+            SessionToolCall,
             MessageRole,
             CreateSessionRequest,
             UpdateSessionRequest,
@@ -458,7 +461,7 @@ async fn delete_provider_profile(
     tag = "sessions",
     request_body = CreateSessionRequest,
     responses(
-        (status = 201, description = "Created session", body = Session),
+        (status = 201, description = "Created session", body = SessionResponse),
         (status = 400, description = "No default provider profile", body = ErrorResponse),
         (status = 404, description = "Agent or provider profile not found", body = ErrorResponse)
     )
@@ -468,7 +471,7 @@ async fn create_session(
     payload: web::Json<CreateSessionRequest>,
 ) -> Result<HttpResponse, session_service::SessionError> {
     let session = session_service::create_session(&state, payload.into_inner()).await?;
-    Ok(HttpResponse::Created().json(session))
+    Ok(HttpResponse::Created().json(SessionResponse::from(&session)))
 }
 
 #[utoipa::path(
@@ -476,7 +479,7 @@ async fn create_session(
     path = "/sessions",
     tag = "sessions",
     params(("agent_id" = Option<Uuid>, Query, description = "Filter by agent ID")),
-    responses((status = 200, description = "List sessions", body = [Session]))
+    responses((status = 200, description = "List sessions", body = [SessionResponse]))
 )]
 async fn list_sessions(
     state: web::Data<AppState>,
@@ -492,7 +495,11 @@ async fn list_sessions(
         .list_sessions(agent_id, include_messages.unwrap_or(false))
         .await
     {
-        Ok(sessions) => HttpResponse::Ok().json(sessions),
+        Ok(sessions) => {
+            let response: Vec<SessionResponse> =
+                sessions.iter().map(SessionResponse::from).collect();
+            HttpResponse::Ok().json(response)
+        }
         Err(error) => repository_error_response(error),
     }
 }
@@ -503,7 +510,7 @@ async fn list_sessions(
     tag = "sessions",
     params(("id" = Uuid, Path, description = "Session ID")),
     responses(
-        (status = 200, description = "Session", body = Session),
+        (status = 200, description = "Session with messages", body = SessionDetailResponse),
         (status = 404, description = "Session not found", body = ErrorResponse)
     )
 )]
@@ -511,7 +518,49 @@ async fn get_session(state: web::Data<AppState>, path: web::Path<Uuid>) -> HttpR
     let id = path.into_inner();
 
     match state.repository.get_session(id).await {
-        Ok(Some(session)) => HttpResponse::Ok().json(session),
+        Ok(Some(session)) => {
+            // Load tool calls and attach to messages
+            let tool_calls = state
+                .repository
+                .get_tool_calls_for_session(id)
+                .await
+                .unwrap_or_default();
+
+            let tc_map = {
+                let mut map: std::collections::HashMap<String, Vec<SessionToolCall>> =
+                    std::collections::HashMap::new();
+                for tc in tool_calls {
+                    map.entry(tc.message_id.clone()).or_default().push(tc);
+                }
+                map
+            };
+
+            let messages: Vec<SessionMessageResponse> = session
+                .messages
+                .into_iter()
+                .map(|m| {
+                    let msg_id = m.id.clone();
+                    let mut resp = SessionMessageResponse::from(m);
+                    if let Some(tcs) = tc_map.get(&msg_id) {
+                        resp.tool_calls = tcs.clone();
+                    }
+                    resp
+                })
+                .collect();
+
+            let detail = SessionDetailResponse {
+                id: session.id,
+                agent_id: session.agent_id,
+                provider_profile_id: session.provider_profile_id,
+                title: session.title,
+                messages,
+                speedwagon_ids: session.speedwagon_ids,
+                source_ids: session.source_ids,
+                created_at: session.created_at,
+                updated_at: session.updated_at,
+            };
+            HttpResponse::Ok().json(detail)
+        }
         Ok(None) => json_error(StatusCode::NOT_FOUND, "session not found"),
         Err(error) => repository_error_response(error),
     }
@@ -524,7 +573,7 @@ async fn get_session(state: web::Data<AppState>, path: web::Path<Uuid>) -> HttpR
     params(("id" = Uuid, Path, description = "Session ID")),
     request_body = UpdateSessionRequest,
     responses(
-        (status = 200, description = "Updated session", body = Session),
+        (status = 200, description = "Updated session", body = SessionResponse),
         (status = 404, description = "Session not found", body = ErrorResponse)
     )
 )]
@@ -535,7 +584,7 @@ async fn update_session(
 ) -> Result<HttpResponse, session_service::SessionError> {
     let id = path.into_inner();
     let session = session_service::update_session(&state, id, payload.into_inner()).await?;
-    Ok(HttpResponse::Ok().json(session))
+    Ok(HttpResponse::Ok().json(SessionResponse::from(&session)))
 }
 
 #[utoipa::path(
@@ -576,7 +625,7 @@ async fn add_message_streaming(
     payload: web::Json<AddSessionMessageRequest>,
 ) -> Result<HttpResponse, session_service::SessionError> {
     let id = path.into_inner();
-    let AddSessionMessageRequest { role: _, content } = payload.into_inner();
+    let AddSessionMessageRequest { content } = payload.into_inner();
 
     let event_stream = session_service::send_message_streaming(&state, id, content).await?;
 
@@ -1413,7 +1462,7 @@ mod tests {
     ) -> (StatusCode, Vec<(String, Value)>) {
         let req = test::TestRequest::post()
             .uri(&format!("/sessions/{session_id}/messages/stream"))
-            .set_json(json!({ "role": "user", "content": content }))
+            .set_json(json!({ "content": content }))
             .to_request();
         let resp = test::call_service(app, req).await;
         let status = resp.status();
