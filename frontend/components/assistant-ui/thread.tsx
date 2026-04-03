@@ -6,6 +6,7 @@ import {
   ThreadPrimitive,
   ComposerPrimitive,
   MessagePrimitive,
+  useAuiState,
 } from "@assistant-ui/react";
 import type { ToolCallMessagePartProps } from "@assistant-ui/react";
 
@@ -27,6 +28,7 @@ export const Thread: FC<{ composerLeft?: React.ReactNode }> = ({ composerLeft })
               AssistantMessage,
             }}
           />
+          <TypingIndicator />
           <div className="min-h-8 grow" />
         </ThreadPrimitive.If>
       </ThreadPrimitive.Viewport>
@@ -99,6 +101,21 @@ export const AssistantMessage: FC = () => {
         />
       </div>
     </MessagePrimitive.Root>
+  );
+};
+
+const TypingIndicator: FC = () => {
+  const isRunning = useAuiState((s) => s.thread.isRunning);
+  if (!isRunning) return null;
+
+  return (
+    <div className="mx-auto w-full max-w-2xl py-4">
+      <div className="flex items-center gap-1">
+        <span className="h-2 w-2 rounded-full bg-muted-foreground/50 animate-[bounce_1.4s_ease-in-out_infinite]" />
+        <span className="h-2 w-2 rounded-full bg-muted-foreground/50 animate-[bounce_1.4s_ease-in-out_0.2s_infinite]" />
+        <span className="h-2 w-2 rounded-full bg-muted-foreground/50 animate-[bounce_1.4s_ease-in-out_0.4s_infinite]" />
+      </div>
+    </div>
   );
 };
 
