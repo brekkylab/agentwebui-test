@@ -4,10 +4,10 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-ailoy = { git = "https://github.com/brekkylab/ailoy.git", rev = "55c472cb1f1450cc82cdc028e5450e2398d7418e" }
+ailoy = { git = "https://github.com/brekkylab/ailoy.git", rev = "b0c5b92af2da82b7e45523cc9d71e24dea8e24e3" }
 anyhow = "1.0.100"
 futures = "0.3"
-knowledge-agent = { git = "https://github.com/brekkylab/agentmaker.git", rev = "255beb2" }
+knowledge-agent = { path = "../knowledge-agent" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "2.0.17"

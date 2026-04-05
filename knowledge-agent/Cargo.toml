@@ -12,18 +12,18 @@ name = "knowledge-agent"
 path = "src/main.rs"
 
 [dependencies]
-ailoy = { workspace = true }
+ailoy = { git = "https://github.com/brekkylab/ailoy.git", rev = "b0c5b92af2da82b7e45523cc9d71e24dea8e24e3" }
 dotenvy = "0.15"
 tantivy = "0.22"
-serde = { workspace = true }
-serde_json = { workspace = true }
-anyhow = { workspace = true }
-log = { workspace = true }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+anyhow = "1.0.100"
+log = "0.4"
 regex = "1"
 globset = "0.4"
 ignore = "0.4"
 url = { version = "2", features = ["serde"] }
-indexmap = { workspace = true }
+indexmap = "2"
 chrono = { version = "0.4", features = ["serde"] }
 rand = "0.8"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "time"] }
