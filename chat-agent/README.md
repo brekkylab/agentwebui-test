@@ -110,12 +110,12 @@ Requires AWS CLI configured with access to `s3://ne-rag-dataset`.
 If you need to re-index from scratch, use the [agentmaker](https://github.com/brekkylab/agentmaker) `knowledge-agent` CLI:
 
 ```bash
-cargo run -p knowledge-agent -- \
+cargo run --manifest-path knowledge-agent/Cargo.toml -- \
   --index-dir ./backend/data/index/finance \
   --reindex --index-only \
   --target-paths ./backend/data/corpus/finance
 
-cargo run -p knowledge-agent -- \
+cargo run --manifest-path knowledge-agent/Cargo.toml -- \
   --index-dir ./backend/data/index/novel \
   --reindex --index-only \
   --target-paths ./backend/data/corpus/novel
@@ -155,10 +155,10 @@ Integration tests verify the LLM routes queries to the correct knowledge base:
 
 ```bash
 # Unit tests only (no API call)
-cargo test
+cargo test --manifest-path chat-agent/Cargo.toml
 
 # Routing integration tests (requires OPENAI_API_KEY + indexes)
-cargo test --test routing_test -- --ignored --nocapture
+cargo test --manifest-path chat-agent/Cargo.toml --test routing_test -- --ignored --nocapture
 ```
 
 | Test | Query | Expected kb_id |

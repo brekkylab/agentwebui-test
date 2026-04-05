@@ -224,22 +224,22 @@ knowledge-agent/
 ## Build & Run
 
 ```bash
-# Build
-cargo build -p knowledge-agent
+# Build (from repo root)
+cargo build --manifest-path knowledge-agent/Cargo.toml
 
-# Index only
-cargo run -p knowledge-agent -- --index-only
+# Index only (from repo root)
+cargo run --manifest-path knowledge-agent/Cargo.toml -- --index-only
 
-# Unit tests (new tools)
-cargo test --test bash_tests -- --nocapture
-cargo test --test python_tests -- --nocapture
-cargo test --test calculator_tests -- --nocapture
+# Unit tests (new tools, from repo root)
+cargo test --manifest-path knowledge-agent/Cargo.toml --test bash_tests -- --nocapture
+cargo test --manifest-path knowledge-agent/Cargo.toml --test python_tests -- --nocapture
+cargo test --manifest-path knowledge-agent/Cargo.toml --test calculator_tests -- --nocapture
 
-# Unit tests (existing)
-cargo test --test find_open_tests -- --nocapture
-cargo test --test search_tests -- --nocapture
+# Unit tests (existing, from repo root)
+cargo test --manifest-path knowledge-agent/Cargo.toml --test find_open_tests -- --nocapture
+cargo test --manifest-path knowledge-agent/Cargo.toml --test search_tests -- --nocapture
 
-# E2E ReAct tests (requires OPENAI_API_KEY)
-cargo test --test e2e_react_test test_e2e_react_financebench -- --ignored --nocapture
-cargo test --test e2e_react_test test_e2e_react_novelqa -- --ignored --nocapture
+# E2E ReAct tests (requires OPENAI_API_KEY, from repo root)
+cargo test --manifest-path knowledge-agent/Cargo.toml --test e2e_react_test test_e2e_react_financebench -- --ignored --nocapture
+cargo test --manifest-path knowledge-agent/Cargo.toml --test e2e_react_test test_e2e_react_novelqa -- --ignored --nocapture
 ```
