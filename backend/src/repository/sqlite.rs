@@ -1,9 +1,10 @@
 use std::collections::HashMap;
 use std::str::FromStr;
+use std::time::Duration;
 
 use async_trait::async_trait;
 use chrono::{DateTime, SecondsFormat, Utc};
-use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions, SqliteRow};
+use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteRow};
 use sqlx::{Row, SqlitePool};
 use uuid::Uuid;
 
@@ -23,7 +24,9 @@ impl SqliteRepository {
         let options = SqliteConnectOptions::from_str(database_url)
             .map_err(|_| RepositoryError::InvalidDatabaseUrl(database_url.to_string()))?
             .create_if_missing(true)
-            .foreign_keys(true);
+            .foreign_keys(true)
+            .journal_mode(SqliteJournalMode::Wal)
+            .busy_timeout(Duration::from_secs(5));
 
         let pool = SqlitePoolOptions::new()
             .max_connections(5)
@@ -37,6 +40,10 @@ impl SqliteRepository {
 
     async fn init_schema(&self) -> RepositoryResult<()> {
         sqlx::query("PRAGMA foreign_keys = ON;")
+            .execute(&self.pool)
+            .await?;
+        // WAL mode + NORMAL sync: safe for WAL, skips redundant fsync per commit
+        sqlx::query("PRAGMA synchronous = NORMAL;")
             .execute(&self.pool)
             .await?;
 
