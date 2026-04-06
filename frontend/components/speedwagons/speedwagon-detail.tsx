@@ -12,6 +12,7 @@ import {
 import type { ApiSpeedwagon } from "@/lib/types";
 import { PROVIDER_MODELS } from "@/lib/constants";
 import { useAppStore } from "@/lib/store";
+import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -24,11 +25,11 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 
-const ALL_MODELS: string[] = [
-  ...PROVIDER_MODELS.OpenAI,
-  ...PROVIDER_MODELS.Anthropic,
-  ...PROVIDER_MODELS.Gemini,
-];
+const OPENAI_MODELS: readonly string[] = PROVIDER_MODELS.OpenAI;
+const UNSUPPORTED_PROVIDERS = [
+  { label: "Anthropic", models: PROVIDER_MODELS.Anthropic },
+  { label: "Gemini", models: PROVIDER_MODELS.Gemini },
+] as const;
 
 interface Props {
   id: string;
@@ -227,7 +228,7 @@ export function SpeedwagonDetail({ id }: Props) {
       setSw((prev) => prev ? { ...prev, index_status: "indexing", index_started_at: new Date().toISOString() } : prev);
       fetchSpeedwagons();
     } catch (e) {
-      setError(e instanceof Error ? e.message : "인덱싱 실패");
+      toast.error(e instanceof Error ? e.message : "인덱싱 실패");
     } finally {
       setIndexing(false);
     }
@@ -240,7 +241,7 @@ export function SpeedwagonDetail({ id }: Props) {
       fetchSpeedwagons();
       router.push("/sources");
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Delete failed");
+      toast.error(e instanceof Error ? e.message : "삭제에 실패했습니다");
       setDeleting(false);
       setDeleteOpen(false);
     }
@@ -306,17 +307,17 @@ export function SpeedwagonDetail({ id }: Props) {
         </div>
       </div>
 
-      {/* Instruction */}
+      {/* Instruction — merged with default RAG prompt as <additional_instructions> */}
       <div className="space-y-1.5">
-        <label className="text-sm font-medium">서브에이전트 시스템 프롬프트</label>
+        <label className="text-sm font-medium">서브에이전트 추가 지시</label>
         <p className="text-xs text-muted-foreground">
-          비워두면 기본 시스템 프롬프트를 사용합니다.
+          기본 RAG 프롬프트에 추가됩니다. 비워두면 기본 프롬프트만 사용합니다.
         </p>
         <textarea
           className="w-full rounded-md border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring min-h-[100px] resize-y"
           value={instruction}
           onChange={(e) => handleInstructionChange(e.target.value)}
-          placeholder="You are a helpful assistant specialized in..."
+          placeholder="예: 한국어로 답변해주세요, 출처를 반드시 포함해주세요..."
         />
       </div>
 
@@ -324,18 +325,25 @@ export function SpeedwagonDetail({ id }: Props) {
       <div className="space-y-1.5">
         <label className="text-sm font-medium">서브에이전트 모델</label>
         <p className="text-xs text-muted-foreground">
-          비워두면 메인 에이전트와 같은 모델을 사용합니다.
+          Speedwagon은 현재 OpenAI 호환 provider에서만 지원됩니다.
         </p>
         <select
           className="w-full rounded-md border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
           value={lm}
           onChange={(e) => handleLmChange(e.target.value)}
         >
-          <option value="">메인 에이전트와 동일</option>
-          {ALL_MODELS.map((m) => (
-            <option key={m} value={m}>
-              {m}
-            </option>
+          <option value="" disabled>메인 에이전트와 동일 (OpenAI만 지원)</option>
+          <optgroup label="OpenAI">
+            {OPENAI_MODELS.map((m) => (
+              <option key={m} value={m}>{m}</option>
+            ))}
+          </optgroup>
+          {UNSUPPORTED_PROVIDERS.map(({ label, models }) => (
+            <optgroup key={label} label={`${label} (미지원)`}>
+              {models.map((m) => (
+                <option key={m} value={m} disabled>{m}</option>
+              ))}
+            </optgroup>
           ))}
         </select>
       </div>

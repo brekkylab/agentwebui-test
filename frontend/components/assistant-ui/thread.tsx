@@ -6,7 +6,12 @@ import {
   ThreadPrimitive,
   ComposerPrimitive,
   MessagePrimitive,
+  useAuiState,
 } from "@assistant-ui/react";
+import type { ToolCallMessagePartProps } from "@assistant-ui/react";
+
+import { MarkdownRenderer } from "@/components/chat/markdown-renderer";
+import { ToolCallBlock } from "@/components/chat/tool-call-block";
 
 export const Thread: FC<{ composerLeft?: React.ReactNode }> = ({ composerLeft }) => {
   return (
@@ -23,6 +28,7 @@ export const Thread: FC<{ composerLeft?: React.ReactNode }> = ({ composerLeft })
               AssistantMessage,
             }}
           />
+          <TypingIndicator />
           <div className="min-h-8 grow" />
         </ThreadPrimitive.If>
       </ThreadPrimitive.Viewport>
@@ -70,13 +76,46 @@ export const Composer: FC<{ composerLeft?: React.ReactNode }> = ({ composerLeft 
   );
 };
 
+function ToolCallFallback({ toolName, args, result, status }: ToolCallMessagePartProps) {
+  return (
+    <ToolCallBlock
+      tool={toolName}
+      status={status?.type === "running" ? "calling" : "done"}
+      args={args as Record<string, unknown> | undefined}
+      result={result}
+    />
+  );
+}
+
 export const AssistantMessage: FC = () => {
   return (
     <MessagePrimitive.Root className="relative mx-auto w-full max-w-2xl py-4">
       <div className="leading-7 break-words text-foreground">
-        <MessagePrimitive.Content />
+        <MessagePrimitive.Content
+          components={{
+            Text: ({ text }) => <MarkdownRenderer content={text} />,
+            tools: {
+              Fallback: ToolCallFallback,
+            },
+          }}
+        />
       </div>
     </MessagePrimitive.Root>
+  );
+};
+
+const TypingIndicator: FC = () => {
+  const isRunning = useAuiState((s) => s.thread.isRunning);
+  if (!isRunning) return null;
+
+  return (
+    <div className="mx-auto w-full max-w-2xl py-4">
+      <div className="flex items-center gap-1">
+        <span className="h-2 w-2 rounded-full bg-muted-foreground/50 animate-[bounce_1.4s_ease-in-out_infinite]" />
+        <span className="h-2 w-2 rounded-full bg-muted-foreground/50 animate-[bounce_1.4s_ease-in-out_0.2s_infinite]" />
+        <span className="h-2 w-2 rounded-full bg-muted-foreground/50 animate-[bounce_1.4s_ease-in-out_0.4s_infinite]" />
+      </div>
+    </div>
   );
 };
 

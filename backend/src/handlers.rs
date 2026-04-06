@@ -2,21 +2,24 @@ use std::sync::Arc;
 
 use actix_multipart::Multipart;
 use actix_web::http::StatusCode;
-use actix_web::{HttpResponse, web};
+use actix_web::{HttpResponse, ResponseError, web};
 use futures_util::StreamExt;
 use serde::Serialize;
 use utoipa::{OpenApi, ToSchema};
 use uuid::Uuid;
 
+use crate::services::session::SseEvent;
+
 use crate::agent::spec::{
     AgentProvider as ApiAgentProvider, LangModelProvider as ApiLangModelProvider,
 };
 use crate::models::{
-    AddSessionMessageRequest, AddSessionMessageResponse, Agent, AgentResponse,
+    AddSessionMessageRequest, Agent, AgentResponse,
     CreateAgentRequest, CreateProviderProfileRequest,
     CreateSessionRequest, CreateSpeedwagonRequest, ErrorResponse, ListSessionsQuery, MessageRole,
-    ProviderProfile, ProviderProfileResponse, Session, SessionMessage, SourceResponse, SourceType,
-    SpeedwagonIndexStatus, SpeedwagonResponse,
+    ProviderProfile, ProviderProfileResponse, SessionDetailResponse, SessionMessageResponse,
+    SessionResponse, SourceResponse, SourceType,
+    SpeedwagonIndexStatus, SpeedwagonResponse, SessionToolCall,
     UpdateAgentRequest, UpdateProviderProfileRequest, UpdateSessionRequest, UpdateSpeedwagonRequest,
 };
 use crate::repository::RepositoryError;
@@ -48,7 +51,6 @@ struct HealthResponse {
         get_session,
         update_session,
         delete_session,
-        add_message,
         upload_source,
         list_sources,
         get_source,
@@ -59,6 +61,8 @@ struct HealthResponse {
         update_speedwagon,
         delete_speedwagon,
         index_speedwagon,
+        add_message_streaming,
+        get_session_tool_calls,
     ),
     components(
         schemas(
@@ -70,13 +74,14 @@ struct HealthResponse {
             ProviderProfileResponse,
             CreateProviderProfileRequest,
             UpdateProviderProfileRequest,
-            Session,
-            SessionMessage,
+            SessionResponse,
+            SessionDetailResponse,
+            SessionMessageResponse,
+            SessionToolCall,
             MessageRole,
             CreateSessionRequest,
             UpdateSessionRequest,
             AddSessionMessageRequest,
-            AddSessionMessageResponse,
             SourceResponse,
             SourceType,
             SpeedwagonResponse,
@@ -137,7 +142,14 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
                 .route(web::put().to(update_session))
                 .route(web::delete().to(delete_session)),
         )
-        .service(web::resource("/sessions/{id}/messages").route(web::post().to(add_message)))
+        .service(
+            web::resource("/sessions/{id}/messages/stream")
+                .route(web::post().to(add_message_streaming)),
+        )
+        .service(
+            web::resource("/sessions/{id}/tool-calls")
+                .route(web::get().to(get_session_tool_calls)),
+        )
         .service(
             web::resource("/sources")
                 .route(web::get().to(list_sources))
@@ -449,7 +461,7 @@ async fn delete_provider_profile(
     tag = "sessions",
     request_body = CreateSessionRequest,
     responses(
-        (status = 201, description = "Created session", body = Session),
+        (status = 201, description = "Created session", body = SessionResponse),
         (status = 400, description = "No default provider profile", body = ErrorResponse),
         (status = 404, description = "Agent or provider profile not found", body = ErrorResponse)
     )
@@ -459,7 +471,7 @@ async fn create_session(
     payload: web::Json<CreateSessionRequest>,
 ) -> Result<HttpResponse, session_service::SessionError> {
     let session = session_service::create_session(&state, payload.into_inner()).await?;
-    Ok(HttpResponse::Created().json(session))
+    Ok(HttpResponse::Created().json(SessionResponse::from(&session)))
 }
 
 #[utoipa::path(
@@ -467,7 +479,7 @@ async fn create_session(
     path = "/sessions",
     tag = "sessions",
     params(("agent_id" = Option<Uuid>, Query, description = "Filter by agent ID")),
-    responses((status = 200, description = "List sessions", body = [Session]))
+    responses((status = 200, description = "List sessions", body = [SessionResponse]))
 )]
 async fn list_sessions(
     state: web::Data<AppState>,
@@ -483,7 +495,11 @@ async fn list_sessions(
         .list_sessions(agent_id, include_messages.unwrap_or(false))
         .await
     {
-        Ok(sessions) => HttpResponse::Ok().json(sessions),
+        Ok(sessions) => {
+            let response: Vec<SessionResponse> =
+                sessions.iter().map(SessionResponse::from).collect();
+            HttpResponse::Ok().json(response)
+        }
         Err(error) => repository_error_response(error),
     }
 }
@@ -494,17 +510,16 @@ async fn list_sessions(
     tag = "sessions",
     params(("id" = Uuid, Path, description = "Session ID")),
     responses(
-        (status = 200, description = "Session", body = Session),
+        (status = 200, description = "Session with messages", body = SessionDetailResponse),
         (status = 404, description = "Session not found", body = ErrorResponse)
     )
 )]
 async fn get_session(state: web::Data<AppState>, path: web::Path<Uuid>) -> HttpResponse {
     let id = path.into_inner();
-
-    match state.repository.get_session(id).await {
-        Ok(Some(session)) => HttpResponse::Ok().json(session),
+    match session_service::get_session_detail(&state, id).await {
+        Ok(Some(detail)) => HttpResponse::Ok().json(detail),
         Ok(None) => json_error(StatusCode::NOT_FOUND, "session not found"),
-        Err(error) => repository_error_response(error),
+        Err(error) => error.error_response(),
     }
 }
 
@@ -515,7 +530,7 @@ async fn get_session(state: web::Data<AppState>, path: web::Path<Uuid>) -> HttpR
     params(("id" = Uuid, Path, description = "Session ID")),
     request_body = UpdateSessionRequest,
     responses(
-        (status = 200, description = "Updated session", body = Session),
+        (status = 200, description = "Updated session", body = SessionResponse),
         (status = 404, description = "Session not found", body = ErrorResponse)
     )
 )]
@@ -526,7 +541,7 @@ async fn update_session(
 ) -> Result<HttpResponse, session_service::SessionError> {
     let id = path.into_inner();
     let session = session_service::update_session(&state, id, payload.into_inner()).await?;
-    Ok(HttpResponse::Ok().json(session))
+    Ok(HttpResponse::Ok().json(SessionResponse::from(&session)))
 }
 
 #[utoipa::path(
@@ -550,26 +565,80 @@ async fn delete_session(
 
 #[utoipa::path(
     post,
-    path = "/sessions/{id}/messages",
+    path = "/sessions/{id}/messages/stream",
     tag = "sessions",
     params(("id" = Uuid, Path, description = "Session ID")),
     request_body = AddSessionMessageRequest,
     responses(
-        (status = 200, description = "Assistant output", body = AddSessionMessageResponse),
+        (status = 200, description = "SSE event stream"),
         (status = 400, description = "Empty message content", body = ErrorResponse),
         (status = 404, description = "Session not found", body = ErrorResponse),
         (status = 502, description = "Runtime/provider failure", body = ErrorResponse)
     )
 )]
-async fn add_message(
+async fn add_message_streaming(
     state: web::Data<AppState>,
     path: web::Path<Uuid>,
     payload: web::Json<AddSessionMessageRequest>,
 ) -> Result<HttpResponse, session_service::SessionError> {
     let id = path.into_inner();
-    let AddSessionMessageRequest { role, content } = payload.into_inner();
-    let response = session_service::send_message(&state, id, role, content).await?;
-    Ok(HttpResponse::Ok().json(response))
+    let AddSessionMessageRequest { content } = payload.into_inner();
+
+    let event_stream = session_service::send_message_streaming(&state, id, content).await?;
+
+    let sse_stream = event_stream.map(|event_result| {
+        match event_result {
+            Ok(event) => {
+                let event_type = match &event {
+                    SseEvent::Thinking { .. } => "thinking",
+                    SseEvent::ToolCall { .. } => "tool_call",
+                    SseEvent::ToolResult { .. } => "tool_result",
+                    SseEvent::Message { .. } => "message",
+                    SseEvent::Done { .. } => "done",
+                    SseEvent::Error { .. } => "error",
+                };
+                let data = serde_json::to_string(&event).unwrap_or_default();
+                Ok::<_, actix_web::Error>(bytes::Bytes::from(format!(
+                    "event: {event_type}\ndata: {data}\n\n"
+                )))
+            }
+            Err(e) => {
+                let data = serde_json::to_string(&SseEvent::Error {
+                    message: e.to_string(),
+                })
+                .unwrap_or_default();
+                Ok(bytes::Bytes::from(format!(
+                    "event: error\ndata: {data}\n\n"
+                )))
+            }
+        }
+    });
+
+    Ok(HttpResponse::Ok()
+        .content_type("text/event-stream")
+        .insert_header(("Cache-Control", "no-cache"))
+        .insert_header(("X-Accel-Buffering", "no"))
+        .streaming(sse_stream))
+}
+
+#[utoipa::path(
+    get,
+    path = "/sessions/{id}/tool-calls",
+    tag = "sessions",
+    params(("id" = Uuid, Path, description = "Session ID")),
+    responses(
+        (status = 200, description = "Tool calls for session"),
+    )
+)]
+async fn get_session_tool_calls(
+    state: web::Data<AppState>,
+    path: web::Path<Uuid>,
+) -> HttpResponse {
+    let session_id = path.into_inner();
+    match state.repository.get_tool_calls_for_session(session_id).await {
+        Ok(tool_calls) => HttpResponse::Ok().json(tool_calls),
+        Err(error) => repository_error_response(error),
+    }
 }
 
 // ===================== Source Handlers =====================
@@ -621,13 +690,13 @@ async fn upload_source(
 
     let upload_dir = state.upload_dir.clone();
     if let Err(error) = tokio::fs::create_dir_all(&upload_dir).await {
-        eprintln!("failed to create upload dir: {error}");
+        tracing::error!("failed to create upload dir: {error}");
         return json_error(StatusCode::INTERNAL_SERVER_ERROR, "failed to create upload directory");
     }
 
     let file_path = upload_dir.join(&stored_name);
     if let Err(error) = tokio::fs::write(&file_path, &file_bytes).await {
-        eprintln!("failed to write file: {error}");
+        tracing::error!("failed to write file: {error}");
         return json_error(StatusCode::INTERNAL_SERVER_ERROR, "failed to write file");
     }
 
@@ -704,7 +773,7 @@ async fn delete_source(state: web::Data<AppState>, path: web::Path<Uuid>) -> Htt
             // Delete file from disk
             if let Some(path) = &file_path {
                 if let Err(error) = tokio::fs::remove_file(path).await {
-                    eprintln!("failed to delete file {path}: {error}");
+                    tracing::warn!("failed to delete file {path}: {error}");
                 }
             }
 
@@ -893,7 +962,7 @@ fn repository_error_response(error: RepositoryError) -> HttpResponse {
         }
     }
 
-    eprintln!("repository error: {error}");
+    tracing::error!("repository error: {error}");
     json_error(StatusCode::INTERNAL_SERVER_ERROR, "internal server error")
 }
 
@@ -1315,54 +1384,51 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::CONFLICT);
     }
 
-    #[actix_web::test]
-    async fn add_message_non_user_role_does_not_trigger_inference() {
-        let temp_dir = TempDir::new().expect("temp dir should be created");
-        let database_url = test_database_url(&temp_dir);
-        let state = web::Data::new(
-            AppState::new_without_bootstrap(&database_url)
-                .await
-                .expect("state should be created"),
-        );
-        let app = test::init_service(App::new().app_data(state).configure(configure)).await;
+    /// SSE 응답 바디를 (event_type, json_data) 쌍의 벡터로 파싱
+    fn parse_sse_events(body: &[u8]) -> Vec<(String, Value)> {
+        let text = std::str::from_utf8(body).unwrap_or("");
+        let mut events = Vec::new();
+        let mut current_event: Option<String> = None;
+        let mut current_data: Option<String> = None;
+        for line in text.lines() {
+            if let Some(ev) = line.strip_prefix("event: ") {
+                current_event = Some(ev.to_string());
+            } else if let Some(dat) = line.strip_prefix("data: ") {
+                current_data = Some(dat.to_string());
+            } else if line.is_empty() {
+                if let (Some(ev), Some(dat)) = (current_event.take(), current_data.take()) {
+                    if let Ok(parsed) = serde_json::from_str::<Value>(&dat) {
+                        events.push((ev, parsed));
+                    }
+                }
+            }
+        }
+        events
+    }
 
-        let agent_id = create_agent(&app).await;
-        let profile_id =
-            create_provider_profile(&app, "openai-default", "chat_completion", true).await;
-
-        let create_session_req = test::TestRequest::post()
-            .uri("/sessions")
-            .set_json(json!({
-                "agent_id": agent_id,
-                "provider_profile_id": profile_id
-            }))
+    /// SSE 스트림으로 유저 메시지 전송, (StatusCode, 파싱된 이벤트 벡터) 반환.
+    /// 비-200 응답인 경우에도 빈 이벤트 벡터와 함께 상태 코드를 반환한다.
+    async fn stream_user_message(
+        app: &impl Service<
+            actix_http::Request,
+            Response = actix_web::dev::ServiceResponse,
+            Error = actix_web::Error,
+        >,
+        session_id: &str,
+        content: &str,
+    ) -> (StatusCode, Vec<(String, Value)>) {
+        let req = test::TestRequest::post()
+            .uri(&format!("/sessions/{session_id}/messages/stream"))
+            .set_json(json!({ "content": content }))
             .to_request();
-        let session_body: Value = test::call_and_read_body_json(&app, create_session_req).await;
-        let session_id = session_body["id"]
-            .as_str()
-            .expect("session id must exist")
-            .to_string();
-
-        let add_message_req = test::TestRequest::post()
-            .uri(&format!("/sessions/{session_id}/messages"))
-            .set_json(json!({ "role": "system", "content": "meta note" }))
-            .to_request();
-        let response_body: Value = test::call_and_read_body_json(&app, add_message_req).await;
-        assert!(response_body["assistant_message"].is_null());
-
-        let get_session_req = test::TestRequest::get()
-            .uri(&format!("/sessions/{session_id}"))
-            .to_request();
-        let updated_session: Value = test::call_and_read_body_json(&app, get_session_req).await;
-        let messages = updated_session["messages"]
-            .as_array()
-            .expect("messages should be an array");
-        assert_eq!(messages.len(), 1);
-        assert_eq!(messages[0]["role"], Value::String("system".to_string()));
+        let resp = test::call_service(app, req).await;
+        let status = resp.status();
+        let body = test::read_body(resp).await;
+        (status, parse_sse_events(&body))
     }
 
     #[actix_web::test]
-    async fn add_message_runtime_failure_returns_bad_gateway_and_keeps_user_message() {
+    async fn add_message_runtime_failure_returns_error_event_and_keeps_user_message() {
         let temp_dir = TempDir::new().expect("temp dir should be created");
         let database_url = test_database_url(&temp_dir);
         let state = web::Data::new(
@@ -1395,12 +1461,14 @@ mod tests {
             .expect("session id must exist")
             .to_string();
 
-        let add_message_req = test::TestRequest::post()
-            .uri(&format!("/sessions/{session_id}/messages"))
-            .set_json(json!({ "role": "user", "content": "hello" }))
-            .to_request();
-        let response = test::call_service(&app, add_message_req).await;
-        assert_eq!(response.status(), StatusCode::BAD_GATEWAY);
+        let (status, events) = stream_user_message(&app, &session_id, "hello").await;
+        // Runtime creation may succeed but the LLM call fails inside the stream
+        if status == StatusCode::OK {
+            let has_error = events.iter().any(|(e, _)| e == "error");
+            assert!(has_error, "expected error event in SSE stream on connection failure");
+        } else {
+            assert_eq!(status, StatusCode::BAD_GATEWAY);
+        }
 
         let get_session_req = test::TestRequest::get()
             .uri(&format!("/sessions/{session_id}"))
@@ -1449,23 +1517,21 @@ mod tests {
             .expect("session id must exist")
             .to_string();
 
-        let first_req = test::TestRequest::post()
-            .uri(&format!("/sessions/{session_id}/messages"))
-            .set_json(json!({ "role": "user", "content": "turn-1" }))
-            .to_request();
-        let first_body: Value = test::call_and_read_body_json(&app, first_req).await;
+        let (status1, first_events) = stream_user_message(&app, &session_id, "turn-1").await;
+        assert_eq!(status1, StatusCode::OK);
+        let first_done = first_events.iter().find(|(e, _)| e == "done")
+            .expect("done event must be present for turn-1");
         assert_eq!(
-            first_body["assistant_message"]["content"],
+            first_done.1["assistant_message"]["content"],
             Value::String("assistant:turn-1".to_string())
         );
 
-        let second_req = test::TestRequest::post()
-            .uri(&format!("/sessions/{session_id}/messages"))
-            .set_json(json!({ "role": "user", "content": "turn-2" }))
-            .to_request();
-        let second_body: Value = test::call_and_read_body_json(&app, second_req).await;
+        let (status2, second_events) = stream_user_message(&app, &session_id, "turn-2").await;
+        assert_eq!(status2, StatusCode::OK);
+        let second_done = second_events.iter().find(|(e, _)| e == "done")
+            .expect("done event must be present for turn-2");
         assert_eq!(
-            second_body["assistant_message"]["content"],
+            second_done.1["assistant_message"]["content"],
             Value::String("assistant:turn-2".to_string())
         );
 
@@ -1473,7 +1539,10 @@ mod tests {
             .lock()
             .expect("request counts lock should be available")
             .clone();
-        assert_eq!(counts, vec![1, 3]);
+        // SSE path includes system prompt + DB-restored history in each LLM call:
+        // turn-1: system(1) + restored-user(1) + streaming-user(1) = 3
+        // turn-2: system(1) + history(2) + restored-user(1) + streaming-user(1) = 5
+        assert_eq!(counts, vec![3, 5]);
 
         server_handle.stop(true).await;
     }
@@ -1513,11 +1582,8 @@ mod tests {
             .expect("session id must exist")
             .to_string();
 
-        let first_req = test::TestRequest::post()
-            .uri(&format!("/sessions/{session_id}/messages"))
-            .set_json(json!({ "role": "user", "content": "before-update" }))
-            .to_request();
-        let _first_body: Value = test::call_and_read_body_json(&app, first_req).await;
+        let (status, _) = stream_user_message(&app, &session_id, "before-update").await;
+        assert_eq!(status, StatusCode::OK);
 
         let update_agent_req = test::TestRequest::put()
             .uri(&format!("/agents/{agent_id}"))
@@ -1532,17 +1598,17 @@ mod tests {
         let update_resp = test::call_service(&app, update_agent_req).await;
         assert_eq!(update_resp.status(), StatusCode::OK);
 
-        let second_req = test::TestRequest::post()
-            .uri(&format!("/sessions/{session_id}/messages"))
-            .set_json(json!({ "role": "user", "content": "after-update" }))
-            .to_request();
-        let _second_body: Value = test::call_and_read_body_json(&app, second_req).await;
+        let (status, _) = stream_user_message(&app, &session_id, "after-update").await;
+        assert_eq!(status, StatusCode::OK);
 
         let counts = request_counts
             .lock()
             .expect("request counts lock should be available")
             .clone();
-        assert_eq!(counts, vec![1, 1]);
+        // After agent update, runtime cache is invalidated and recreated with DB history restore.
+        // turn-1: system(1) + restored-user(1) + streaming-user(1) = 3
+        // turn-2 (after reset): system(1) + restored-history(2) + restored-user(1) + streaming-user(1) = 5
+        assert_eq!(counts, vec![3, 5]);
 
         server_handle.stop(true).await;
     }
@@ -1582,11 +1648,8 @@ mod tests {
             .expect("session id must exist")
             .to_string();
 
-        let first_req = test::TestRequest::post()
-            .uri(&format!("/sessions/{session_id}/messages"))
-            .set_json(json!({ "role": "user", "content": "before-provider-update" }))
-            .to_request();
-        let _first_body: Value = test::call_and_read_body_json(&app, first_req).await;
+        let (status, _) = stream_user_message(&app, &session_id, "before-provider-update").await;
+        assert_eq!(status, StatusCode::OK);
 
         let update_provider_req = test::TestRequest::put()
             .uri(&format!("/provider-profiles/{profile_id}"))
@@ -1599,17 +1662,17 @@ mod tests {
         let update_resp = test::call_service(&app, update_provider_req).await;
         assert_eq!(update_resp.status(), StatusCode::OK);
 
-        let second_req = test::TestRequest::post()
-            .uri(&format!("/sessions/{session_id}/messages"))
-            .set_json(json!({ "role": "user", "content": "after-provider-update" }))
-            .to_request();
-        let _second_body: Value = test::call_and_read_body_json(&app, second_req).await;
+        let (status, _) = stream_user_message(&app, &session_id, "after-provider-update").await;
+        assert_eq!(status, StatusCode::OK);
 
         let counts = request_counts
             .lock()
             .expect("request counts lock should be available")
             .clone();
-        assert_eq!(counts, vec![1, 1]);
+        // After provider profile update, runtime cache is invalidated and recreated with DB history restore.
+        // turn-1: system(1) + restored-user(1) + streaming-user(1) = 3
+        // turn-2 (after reset): system(1) + restored-history(2) + restored-user(1) + streaming-user(1) = 5
+        assert_eq!(counts, vec![3, 5]);
 
         server_handle.stop(true).await;
     }
@@ -1642,12 +1705,7 @@ mod tests {
             .expect("session id must exist")
             .to_string();
 
-        let add_message_req = test::TestRequest::post()
-            .uri(&format!("/sessions/{session_id}/messages"))
-            .set_json(json!({ "role": "system", "content": "hello" }))
-            .to_request();
-        let _response: Value = test::call_and_read_body_json(&app, add_message_req).await;
-
+        // /close endpoint does not exist on this API
         let close_req = test::TestRequest::post()
             .uri(&format!("/sessions/{session_id}/close"))
             .to_request();

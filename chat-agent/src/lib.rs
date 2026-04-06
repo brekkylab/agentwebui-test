@@ -7,7 +7,7 @@ mod chat_agent;
 pub mod speedwagon;
 pub mod tools;
 
-pub use chat_agent::{ChatAgent, ChatAgentRunError, ToolCallEntry};
+pub use chat_agent::{ChatAgent, ChatAgentRunError, ChatEvent, ToolCallEntry};
 pub use speedwagon::{KbEntry, SubAgentProvider};
 
 use ailoy::Value;
