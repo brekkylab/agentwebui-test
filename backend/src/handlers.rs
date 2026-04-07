@@ -4,6 +4,7 @@ use std::sync::Arc;
 use aide::NoApi;
 use aide::axum::ApiRouter;
 use aide::axum::routing::{get, post};
+use ailoy::{AgentProvider, LangModelProvider};
 use axum::Json;
 use axum::extract::{Multipart, Path, Query, State};
 use axum::http::StatusCode;
@@ -19,14 +20,13 @@ use crate::models::{
     CreateProviderProfileRequest, CreateSessionRequest, CreateSpeedwagonRequest, ErrorResponse,
     ListSessionsQuery, ProviderProfile, ProviderProfileResponse, SessionDetailResponse,
     SessionResponse, SourceResponse, SourceType, SpeedwagonIndexStatus, SpeedwagonResponse,
-    UpdateAgentRequest, UpdateProviderProfileRequest, UpdateSessionRequest, UpdateSpeedwagonRequest,
+    UpdateAgentRequest, UpdateProviderProfileRequest, UpdateSessionRequest,
+    UpdateSpeedwagonRequest,
 };
 use crate::repository::RepositoryError;
 use crate::services::session::{self as session_service, SessionError, SseEvent};
 use crate::services::speedwagon::{self as speedwagon_service, SpeedwagonError};
 use crate::state::AppState;
-
-use ailoy::{AgentProvider as ApiAgentProvider, LangModelProvider as ApiLangModelProvider};
 
 type AppState_ = Arc<AppState>;
 type ApiErr = (StatusCode, Json<AppError>);
@@ -48,7 +48,10 @@ impl AppError {
         (StatusCode::BAD_REQUEST, Json(Self { error: msg.into() }))
     }
     fn internal(msg: impl Into<String>) -> ApiErr {
-        (StatusCode::INTERNAL_SERVER_ERROR, Json(Self { error: msg.into() }))
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(Self { error: msg.into() }),
+        )
     }
 }
 
@@ -65,8 +68,12 @@ fn repo_err(error: RepositoryError) -> ApiErr {
 
 fn session_err(e: SessionError) -> ApiErr {
     let status = match &e {
-        SessionError::NotFound | SessionError::AgentNotFound | SessionError::ProviderProfileNotFound => StatusCode::NOT_FOUND,
-        SessionError::NoDefaultProviderProfile | SessionError::EmptyContent => StatusCode::BAD_REQUEST,
+        SessionError::NotFound
+        | SessionError::AgentNotFound
+        | SessionError::ProviderProfileNotFound => StatusCode::NOT_FOUND,
+        SessionError::NoDefaultProviderProfile | SessionError::EmptyContent => {
+            StatusCode::BAD_REQUEST
+        }
         SessionError::Runtime(_) => StatusCode::BAD_GATEWAY,
         SessionError::Repository(_) => StatusCode::INTERNAL_SERVER_ERROR,
     };
@@ -122,7 +129,10 @@ pub fn router(state: AppState_) -> ApiRouter {
             "/sessions/{id}",
             get(get_session).put(update_session).delete(delete_session),
         )
-        .api_route("/sessions/{id}/messages/stream", post(add_message_streaming))
+        .api_route(
+            "/sessions/{id}/messages/stream",
+            post(add_message_streaming),
+        )
         .api_route("/sessions/{id}/tool-calls", get(get_session_tool_calls))
         .api_route("/sources", get(list_sources).post(upload_source))
         .api_route("/sources/{id}", get(get_source).delete(delete_source))
@@ -149,7 +159,11 @@ async fn create_agent(
     Json(payload): Json<CreateAgentRequest>,
 ) -> Result<(StatusCode, Json<AgentResponse>), (StatusCode, Json<AppError>)> {
     let CreateAgentRequest { spec } = payload;
-    let agent = state.repository.create_agent(spec).await.map_err(repo_err)?;
+    let agent = state
+        .repository
+        .create_agent(spec)
+        .await
+        .map_err(repo_err)?;
     Ok((StatusCode::CREATED, Json(to_agent_response(&agent))))
 }
 
@@ -176,7 +190,12 @@ async fn update_agent(
     Json(payload): Json<UpdateAgentRequest>,
 ) -> Result<Json<AgentResponse>, (StatusCode, Json<AppError>)> {
     let UpdateAgentRequest { spec } = payload;
-    match state.repository.update_agent(id, spec).await.map_err(repo_err)? {
+    match state
+        .repository
+        .update_agent(id, spec)
+        .await
+        .map_err(repo_err)?
+    {
         Some(agent) => {
             state.invalidate_runtimes_by_agent_id(id);
             Ok(Json(to_agent_response(&agent)))
@@ -195,7 +214,9 @@ async fn delete_agent(
         .await
         .map_err(repo_err)?
     {
-        return Err(AppError::conflict("cannot delete agent with existing sessions"));
+        return Err(AppError::conflict(
+            "cannot delete agent with existing sessions",
+        ));
     }
     match state.repository.delete_agent(id).await.map_err(repo_err)? {
         true => Ok(StatusCode::NO_CONTENT),
@@ -222,21 +243,35 @@ async fn create_provider_profile(
         .create_provider_profile(name, provider, is_default)
         .await
         .map_err(repo_err)?;
-    Ok((StatusCode::CREATED, Json(to_provider_profile_response(&profile))))
+    Ok((
+        StatusCode::CREATED,
+        Json(to_provider_profile_response(&profile)),
+    ))
 }
 
 async fn list_provider_profiles(
     State(state): State<AppState_>,
 ) -> Result<Json<Vec<ProviderProfileResponse>>, (StatusCode, Json<AppError>)> {
-    let profiles = state.repository.list_provider_profiles().await.map_err(repo_err)?;
-    Ok(Json(profiles.iter().map(to_provider_profile_response).collect()))
+    let profiles = state
+        .repository
+        .list_provider_profiles()
+        .await
+        .map_err(repo_err)?;
+    Ok(Json(
+        profiles.iter().map(to_provider_profile_response).collect(),
+    ))
 }
 
 async fn get_provider_profile(
     State(state): State<AppState_>,
     Path(id): Path<Uuid>,
 ) -> Result<Json<ProviderProfileResponse>, (StatusCode, Json<AppError>)> {
-    match state.repository.get_provider_profile(id).await.map_err(repo_err)? {
+    match state
+        .repository
+        .get_provider_profile(id)
+        .await
+        .map_err(repo_err)?
+    {
         Some(profile) => Ok(Json(to_provider_profile_response(&profile))),
         None => Err(AppError::not_found("provider profile not found")),
     }
@@ -458,7 +493,10 @@ async fn upload_source(
     let file_path = upload_dir.join(&stored_name);
     if let Err(error) = tokio::fs::write(&file_path, &file_bytes).await {
         tracing::error!("failed to write file: {error}");
-        return NoApi(json_error(StatusCode::INTERNAL_SERVER_ERROR, "failed to write file"));
+        return NoApi(json_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "failed to write file",
+        ));
     }
 
     let file_path_str = file_path.to_string_lossy().to_string();
@@ -468,9 +506,9 @@ async fn upload_source(
         .create_source(file_name, SourceType::LocalFile, Some(file_path_str), size)
         .await
     {
-        Ok(source) => NoApi(
-            (StatusCode::CREATED, Json(SourceResponse::from(&source))).into_response(),
-        ),
+        Ok(source) => {
+            NoApi((StatusCode::CREATED, Json(SourceResponse::from(&source))).into_response())
+        }
         Err(error) => NoApi(repository_error_response(error)),
     }
 }
@@ -554,7 +592,11 @@ async fn create_speedwagon(
 async fn list_speedwagons(
     State(state): State<AppState_>,
 ) -> Result<Json<Vec<SpeedwagonResponse>>, (StatusCode, Json<AppError>)> {
-    let list = state.repository.list_speedwagons().await.map_err(repo_err)?;
+    let list = state
+        .repository
+        .list_speedwagons()
+        .await
+        .map_err(repo_err)?;
     Ok(Json(list.iter().map(SpeedwagonResponse::from).collect()))
 }
 
@@ -562,7 +604,12 @@ async fn get_speedwagon(
     State(state): State<AppState_>,
     Path(id): Path<Uuid>,
 ) -> Result<Json<SpeedwagonResponse>, (StatusCode, Json<AppError>)> {
-    match state.repository.get_speedwagon(id).await.map_err(repo_err)? {
+    match state
+        .repository
+        .get_speedwagon(id)
+        .await
+        .map_err(repo_err)?
+    {
         Some(sw) => Ok(Json(SpeedwagonResponse::from(&sw))),
         None => Err(AppError::not_found("speedwagon not found")),
     }
@@ -624,8 +671,8 @@ fn to_agent_response(agent: &Agent) -> AgentResponse {
 }
 
 fn to_provider_profile_response(profile: &ProviderProfile) -> ProviderProfileResponse {
-    let mut provider: ApiAgentProvider = profile.provider.clone();
-    let ApiLangModelProvider::API { api_key, .. } = &mut provider.lm;
+    let mut provider: AgentProvider = profile.provider.clone();
+    let LangModelProvider::API { api_key, .. } = &mut provider.lm;
     *api_key = None;
 
     ProviderProfileResponse {

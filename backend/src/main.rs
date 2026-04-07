@@ -1,4 +1,3 @@
-mod agent;
 mod handlers;
 mod models;
 mod prompt;
@@ -55,7 +54,10 @@ async fn main() -> std::io::Result<()> {
         .merge(
             ApiRouter::new()
                 .route("/api-docs/openapi.json", axum::routing::get(serve_openapi))
-                .route("/docs", axum::routing::get(Scalar::new("/api-docs/openapi.json").axum_handler()))
+                .route(
+                    "/docs",
+                    axum::routing::get(Scalar::new("/api-docs/openapi.json").axum_handler()),
+                ),
         )
         .layer(Extension(Arc::new(openapi)))
         .layer(cors);

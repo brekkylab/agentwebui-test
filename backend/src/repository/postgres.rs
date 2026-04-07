@@ -1,10 +1,13 @@
+use ailoy::{AgentProvider, AgentSpec};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use uuid::Uuid;
 
-use crate::models::{Agent, MessageRole, ProviderProfile, Session, SessionMessage, SessionToolCall, Source, SourceType, Speedwagon, SpeedwagonIndexStatus};
+use crate::models::{
+    Agent, MessageRole, ProviderProfile, Session, SessionMessage, SessionToolCall, Source,
+    SourceType, Speedwagon, SpeedwagonIndexStatus,
+};
 use crate::repository::{Repository, RepositoryResult};
-use ailoy::{AgentProvider, AgentSpec};
 
 pub struct PostgresRepository;
 
