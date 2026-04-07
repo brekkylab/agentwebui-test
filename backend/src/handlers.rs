@@ -39,7 +39,7 @@ pub fn router(state: AppState_) -> ApiRouter {
         .route("/health", get(health))
         .route("/agents", get(list_agents).post(create_agent))
         .route(
-            "/agents/:id",
+            "/agents/{id}",
             get(get_agent).put(update_agent).delete(delete_agent),
         )
         .route(
@@ -47,31 +47,31 @@ pub fn router(state: AppState_) -> ApiRouter {
             get(list_provider_profiles).post(create_provider_profile),
         )
         .route(
-            "/provider-profiles/:id",
+            "/provider-profiles/{id}",
             get(get_provider_profile)
                 .put(update_provider_profile)
                 .delete(delete_provider_profile),
         )
         .route("/sessions", get(list_sessions).post(create_session))
         .route(
-            "/sessions/:id",
+            "/sessions/{id}",
             get(get_session).put(update_session).delete(delete_session),
         )
-        .route("/sessions/:id/messages/stream", post(add_message_streaming))
-        .route("/sessions/:id/tool-calls", get(get_session_tool_calls))
+        .route("/sessions/{id}/messages/stream", post(add_message_streaming))
+        .route("/sessions/{id}/tool-calls", get(get_session_tool_calls))
         .route("/sources", get(list_sources).post(upload_source))
-        .route("/sources/:id", get(get_source).delete(delete_source))
+        .route("/sources/{id}", get(get_source).delete(delete_source))
         .route(
             "/speedwagons",
             get(list_speedwagons).post(create_speedwagon),
         )
         .route(
-            "/speedwagons/:id",
+            "/speedwagons/{id}",
             get(get_speedwagon)
                 .put(update_speedwagon)
                 .delete(delete_speedwagon),
         )
-        .route("/speedwagons/:id/index", post(index_speedwagon))
+        .route("/speedwagons/{id}/index", post(index_speedwagon))
         .with_state(state)
 }
 
