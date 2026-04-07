@@ -308,16 +308,13 @@ fn build_tool_set(
     sub_provider: SubAgentProvider,
     session_source_paths: Vec<(String, String, PathBuf)>,
 ) -> (Vec<String>, ToolSet) {
-    let mut tool_set = tools::build_default_tool_set();
-    let mut tool_names = tool_set.names();
-    if let Some((name, runtime)) = speedwagon::build_speedwagon_tool(kb_entries, sub_provider) {
-        tool_names.push(name.clone());
-        tool_set.insert(name, runtime);
-    }
+    let tool_set = tools::build_default_tool_set();
+    let mut tool_set =
+        speedwagon::register_speedwagon_subagents(tool_set, kb_entries, &sub_provider);
     if let Some((name, runtime)) = tools::build_read_source_tool(session_source_paths) {
-        tool_names.push(name.clone());
         tool_set.insert(name, runtime);
     }
+    let tool_names = tool_set.names();
     (tool_names, tool_set)
 }
 
