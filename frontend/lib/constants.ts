@@ -28,6 +28,6 @@ export const PROVIDER_CONFIG: Record<
   },
   Gemini: {
     schema: "gemini",
-    url: "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent",
+    url: "https://generativelanguage.googleapis.com/v1beta/models/",
   },
 } as const;

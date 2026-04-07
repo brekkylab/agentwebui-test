@@ -330,7 +330,7 @@ async fn create_provider_profile(
 
     match state
         .repository
-        .create_provider_profile(name, provider.into(), is_default)
+        .create_provider_profile(name, provider.normalized().into(), is_default)
         .await
     {
         Ok(profile) => HttpResponse::Created().json(to_provider_profile_response(&profile)),
@@ -404,7 +404,7 @@ async fn update_provider_profile(
 
     match state
         .repository
-        .update_provider_profile(id, name, provider.into(), is_default)
+        .update_provider_profile(id, name, provider.normalized().into(), is_default)
         .await
     {
         Ok(Some(profile)) => {
