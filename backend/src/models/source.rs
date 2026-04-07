@@ -1,11 +1,11 @@
 use chrono::{DateTime, Utc};
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use utoipa::ToSchema;
 use uuid::Uuid;
 
 // --- Enums ---
 
-#[derive(Clone, Debug, Serialize, Deserialize, ToSchema)]
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum SourceType {
     LocalFile,
@@ -26,7 +26,7 @@ pub struct Source {
 
 // --- Response DTOs ---
 
-#[derive(Clone, Debug, Serialize, ToSchema)]
+#[derive(Clone, Debug, Serialize, JsonSchema)]
 pub struct SourceResponse {
     pub id: Uuid,
     pub name: String,

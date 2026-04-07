@@ -1,10 +1,8 @@
-use ailoy::AgentProvider as RuntimeAgentProvider;
+use ailoy::AgentProvider;
 use chrono::{DateTime, Utc};
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use utoipa::ToSchema;
 use uuid::Uuid;
-
-use crate::agent::spec::AgentProvider;
 
 // --- Domain Models ---
 
@@ -12,7 +10,7 @@ use crate::agent::spec::AgentProvider;
 pub struct ProviderProfile {
     pub id: Uuid,
     pub name: String,
-    pub provider: RuntimeAgentProvider,
+    pub provider: AgentProvider,
     pub is_default: bool,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
@@ -20,7 +18,7 @@ pub struct ProviderProfile {
 
 // --- Response DTOs ---
 
-#[derive(Clone, Debug, Serialize, ToSchema)]
+#[derive(Clone, Debug, Serialize, JsonSchema)]
 pub struct ProviderProfileResponse {
     pub id: Uuid,
     pub name: String,
@@ -32,7 +30,7 @@ pub struct ProviderProfileResponse {
 
 // --- Request DTOs ---
 
-#[derive(Debug, Deserialize, ToSchema)]
+#[derive(Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct CreateProviderProfileRequest {
     pub name: String,
@@ -41,7 +39,7 @@ pub struct CreateProviderProfileRequest {
     pub is_default: bool,
 }
 
-#[derive(Debug, Deserialize, ToSchema)]
+#[derive(Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct UpdateProviderProfileRequest {
     pub name: String,

@@ -81,7 +81,7 @@ fn prepare_corpus_dir(
 /// Finalize indexing: swap index_tmp -> index, update DB status, invalidate caches.
 async fn finalize_indexing(
     repository: &Arc<dyn Repository>,
-    state: &actix_web::web::Data<AppState>,
+    state: &Arc<AppState>,
     id: Uuid,
     index_tmp_dir: &std::path::Path,
     index_dir: &std::path::Path,
@@ -124,7 +124,7 @@ async fn finalize_indexing(
 /// Main indexing orchestration — runs inside a spawned background task.
 pub async fn start_indexing(
     repository: Arc<dyn Repository>,
-    state: actix_web::web::Data<AppState>,
+    state: Arc<AppState>,
     speedwagon_data_dir: PathBuf,
     sw: Speedwagon,
 ) -> Result<(), String> {

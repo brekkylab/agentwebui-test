@@ -1,5 +1,6 @@
-use actix_web::http::StatusCode;
-use actix_web::{HttpResponse, ResponseError};
+use axum::Json;
+use axum::http::StatusCode;
+use axum::response::{IntoResponse, Response};
 use uuid::Uuid;
 
 use crate::models::{
@@ -23,26 +24,24 @@ pub enum SpeedwagonError {
     Repository(#[from] RepositoryError),
 }
 
-impl ResponseError for SpeedwagonError {
-    fn status_code(&self) -> StatusCode {
-        match self {
+impl IntoResponse for SpeedwagonError {
+    fn into_response(self) -> Response {
+        let status = match &self {
             Self::NotFound => StatusCode::NOT_FOUND,
             Self::AlreadyIndexing => StatusCode::CONFLICT,
             Self::NoSources => StatusCode::UNPROCESSABLE_ENTITY,
             Self::EmptyName => StatusCode::BAD_REQUEST,
-            Self::Repository(_) => StatusCode::INTERNAL_SERVER_ERROR,
-        }
-    }
-
-    fn error_response(&self) -> HttpResponse {
-        if let Self::Repository(e) = self {
-            tracing::error!("repository error: {e}");
-            return HttpResponse::build(StatusCode::INTERNAL_SERVER_ERROR)
-                .json(ErrorResponse { error: "internal server error".to_string() });
-        }
-        HttpResponse::build(self.status_code()).json(ErrorResponse {
-            error: self.to_string(),
-        })
+            Self::Repository(e) => {
+                tracing::error!("repository error: {e}");
+                StatusCode::INTERNAL_SERVER_ERROR
+            }
+        };
+        let error_msg = if matches!(self, Self::Repository(_)) {
+            "internal server error".to_string()
+        } else {
+            self.to_string()
+        };
+        (status, Json(ErrorResponse { error: error_msg })).into_response()
     }
 }
 

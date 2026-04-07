@@ -1,8 +1,9 @@
 use std::pin::Pin;
 
 use ailoy::{AgentProvider, LangModelAPISchema, LangModelProvider};
-use actix_web::http::StatusCode;
-use actix_web::{HttpResponse, ResponseError};
+use axum::Json;
+use axum::http::StatusCode;
+use axum::response::{IntoResponse, Response};
 use chat_agent::ChatEvent;
 use futures_util::StreamExt;
 use uuid::Uuid;
@@ -32,27 +33,25 @@ pub enum SessionError {
     Runtime(String),
 }
 
-impl ResponseError for SessionError {
-    fn status_code(&self) -> StatusCode {
-        match self {
+impl IntoResponse for SessionError {
+    fn into_response(self) -> Response {
+        let status = match &self {
             Self::NotFound | Self::AgentNotFound | Self::ProviderProfileNotFound => {
                 StatusCode::NOT_FOUND
             }
             Self::NoDefaultProviderProfile | Self::EmptyContent => StatusCode::BAD_REQUEST,
             Self::Runtime(_) => StatusCode::BAD_GATEWAY,
-            Self::Repository(_) => StatusCode::INTERNAL_SERVER_ERROR,
-        }
-    }
-
-    fn error_response(&self) -> HttpResponse {
-        if let Self::Repository(e) = self {
-            tracing::error!("repository error: {e}");
-            return HttpResponse::build(StatusCode::INTERNAL_SERVER_ERROR)
-                .json(ErrorResponse { error: "internal server error".to_string() });
-        }
-        HttpResponse::build(self.status_code()).json(ErrorResponse {
-            error: self.to_string(),
-        })
+            Self::Repository(e) => {
+                tracing::error!("repository error: {e}");
+                StatusCode::INTERNAL_SERVER_ERROR
+            }
+        };
+        let error_msg = if matches!(self, Self::Repository(_)) {
+            "internal server error".to_string()
+        } else {
+            self.to_string()
+        };
+        (status, Json(ErrorResponse { error: error_msg })).into_response()
     }
 }
 
@@ -178,15 +177,15 @@ pub enum SseEvent {
 /// Save user message, run ChatAgent in streaming mode, and yield SSE events.
 /// The final `Done` event includes the persisted assistant message.
 ///
-/// Uses a channel pattern: a `spawn_local` task holds the MutexGuard and streams
-/// ChatEvents, sending SSE events through an mpsc channel. This avoids the `Send`
-/// bound issue since `run_user_text_streaming` returns a `!Send` stream.
+/// Uses an mpsc channel: a spawned task (inside a LocalSet) holds the MutexGuard
+/// and streams ChatEvents, sending SSE events through the channel.
+/// This avoids the `Send` bound issue since `run_user_text_streaming` returns a `!Send` stream.
 pub async fn send_message_streaming(
     state: &AppState,
     session_id: Uuid,
     content: String,
 ) -> Result<
-    Pin<Box<dyn futures_util::Stream<Item = Result<SseEvent, SessionError>>>>,
+    Pin<Box<dyn futures_util::Stream<Item = Result<SseEvent, SessionError>> + Send>>,
     SessionError,
 > {
     if content.trim().is_empty() {
@@ -215,11 +214,17 @@ pub async fn send_message_streaming(
 
     let repository = state.repository.clone();
 
-    // Use actix_web::rt::spawn (spawn_local) since the ChatAgent stream is !Send.
-    // Actix-web handlers already run on a LocalSet, so spawn_local is valid here.
     let (tx, rx) = tokio::sync::mpsc::channel::<Result<SseEvent, SessionError>>(32);
 
-    actix_web::rt::spawn(async move {
+    // `run_user_text_streaming` returns a `!Send` stream, so we use spawn_blocking
+    // to run it inside a new tokio runtime on a dedicated thread.
+    tokio::task::spawn_blocking(move || {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("failed to build local runtime");
+        let local_set = tokio::task::LocalSet::new();
+        local_set.block_on(&rt, async move {
         let mut rt = runtime.lock().await;
         let mut event_stream = rt.run_user_text_streaming(content);
 
@@ -297,7 +302,6 @@ pub async fn send_message_streaming(
                 Ok(Some(msg)) => {
                     // Save tool calls
                     if !tool_calls_for_db.is_empty() {
-                        let now = chrono::Utc::now();
                         let tool_call_models: Vec<SessionToolCall> = tool_calls_for_db
                             .iter()
                             .map(|(name, args, result)| SessionToolCall {
@@ -307,7 +311,7 @@ pub async fn send_message_streaming(
                                 tool_args: args.clone(),
                                 tool_result: result.clone(),
                                 duration_ms: None,
-                                created_at: now,
+                                created_at: chrono::Utc::now(),
                             })
                             .collect();
                         let _ = repository.save_tool_calls(&msg.id, &tool_call_models).await;
@@ -340,6 +344,7 @@ pub async fn send_message_streaming(
                 }))
                 .await;
         }
+        });
     });
 
     let stream = tokio_stream::wrappers::ReceiverStream::new(rx);

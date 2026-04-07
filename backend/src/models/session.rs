@@ -1,13 +1,13 @@
 use std::collections::HashMap;
 
 use chrono::{DateTime, Utc};
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use utoipa::ToSchema;
 use uuid::Uuid;
 
 // --- Enums ---
 
-#[derive(Clone, Debug, Serialize, Deserialize, ToSchema)]
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum MessageRole {
     System,
@@ -18,7 +18,7 @@ pub enum MessageRole {
 
 // --- Domain Models ---
 
-#[derive(Clone, Debug, Serialize, Deserialize, ToSchema)]
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 pub struct SessionMessage {
     pub id: String,
     pub role: MessageRole,
@@ -26,7 +26,7 @@ pub struct SessionMessage {
     pub created_at: DateTime<Utc>,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, ToSchema)]
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 pub struct SessionToolCall {
     pub id: String,
     pub message_id: String,
@@ -37,7 +37,7 @@ pub struct SessionToolCall {
     pub created_at: DateTime<Utc>,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, ToSchema)]
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 pub struct Session {
     pub id: Uuid,
     pub agent_id: Uuid,
@@ -53,7 +53,7 @@ pub struct Session {
 // --- Response DTOs ---
 
 /// API response for GET /sessions (list) and POST /sessions (create) -- no messages
-#[derive(Clone, Debug, Serialize, Deserialize, ToSchema)]
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 pub struct SessionResponse {
     pub id: Uuid,
     pub agent_id: Uuid,
@@ -81,7 +81,7 @@ impl From<&Session> for SessionResponse {
 }
 
 /// API response message -- includes tool calls (only populated in GET /sessions/{id})
-#[derive(Clone, Debug, Serialize, Deserialize, ToSchema)]
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 pub struct SessionMessageResponse {
     pub id: String,
     pub role: MessageRole,
@@ -104,7 +104,7 @@ impl From<SessionMessage> for SessionMessageResponse {
 }
 
 /// API response for GET /sessions/{id} -- includes messages with tool calls
-#[derive(Clone, Debug, Serialize, Deserialize, ToSchema)]
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 pub struct SessionDetailResponse {
     pub id: Uuid,
     pub agent_id: Uuid,
@@ -155,7 +155,7 @@ pub struct ListSessionsQuery {
     pub include_messages: Option<bool>,
 }
 
-#[derive(Debug, Deserialize, ToSchema)]
+#[derive(Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct CreateSessionRequest {
     pub agent_id: Uuid,
@@ -167,7 +167,7 @@ pub struct CreateSessionRequest {
     pub source_ids: Vec<Uuid>,
 }
 
-#[derive(Debug, Deserialize, ToSchema)]
+#[derive(Debug, Deserialize, JsonSchema)]
 pub struct UpdateSessionRequest {
     pub title: Option<String>,
     pub provider_profile_id: Option<Uuid>,
@@ -175,7 +175,7 @@ pub struct UpdateSessionRequest {
     pub source_ids: Option<Vec<Uuid>>,
 }
 
-#[derive(Debug, Deserialize, ToSchema)]
+#[derive(Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct AddSessionMessageRequest {
     pub content: String,
