@@ -1,13 +1,14 @@
 use std::convert::Infallible;
 use std::sync::Arc;
 
+use aide::NoApi;
 use aide::axum::ApiRouter;
+use aide::axum::routing::{get, post};
 use axum::Json;
 use axum::extract::{Multipart, Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::sse::{Event, KeepAlive};
 use axum::response::{IntoResponse, Response, Sse};
-use axum::routing::{get, post};
 use futures_util::StreamExt;
 use schemars::JsonSchema;
 use serde::Serialize;
@@ -16,18 +17,82 @@ use uuid::Uuid;
 use crate::models::{
     AddSessionMessageRequest, Agent, AgentResponse, CreateAgentRequest,
     CreateProviderProfileRequest, CreateSessionRequest, CreateSpeedwagonRequest, ErrorResponse,
-    ListSessionsQuery, ProviderProfile, ProviderProfileResponse, SessionResponse, SourceResponse,
-    SourceType, SpeedwagonIndexStatus, SpeedwagonResponse, UpdateAgentRequest,
-    UpdateProviderProfileRequest, UpdateSessionRequest, UpdateSpeedwagonRequest,
+    ListSessionsQuery, ProviderProfile, ProviderProfileResponse, SessionDetailResponse,
+    SessionResponse, SourceResponse, SourceType, SpeedwagonIndexStatus, SpeedwagonResponse,
+    UpdateAgentRequest, UpdateProviderProfileRequest, UpdateSessionRequest, UpdateSpeedwagonRequest,
 };
 use crate::repository::RepositoryError;
-use crate::services::session::{self as session_service, SseEvent};
-use crate::services::speedwagon as speedwagon_service;
+use crate::services::session::{self as session_service, SessionError, SseEvent};
+use crate::services::speedwagon::{self as speedwagon_service, SpeedwagonError};
 use crate::state::AppState;
 
 use ailoy::{AgentProvider as ApiAgentProvider, LangModelProvider as ApiLangModelProvider};
 
 type AppState_ = Arc<AppState>;
+type ApiErr = (StatusCode, Json<AppError>);
+type ApiResult<T> = Result<T, ApiErr>;
+
+#[derive(Debug, JsonSchema, Serialize)]
+struct AppError {
+    error: String,
+}
+
+impl AppError {
+    fn not_found(msg: impl Into<String>) -> ApiErr {
+        (StatusCode::NOT_FOUND, Json(Self { error: msg.into() }))
+    }
+    fn conflict(msg: impl Into<String>) -> ApiErr {
+        (StatusCode::CONFLICT, Json(Self { error: msg.into() }))
+    }
+    fn bad_request(msg: impl Into<String>) -> ApiErr {
+        (StatusCode::BAD_REQUEST, Json(Self { error: msg.into() }))
+    }
+    fn internal(msg: impl Into<String>) -> ApiErr {
+        (StatusCode::INTERNAL_SERVER_ERROR, Json(Self { error: msg.into() }))
+    }
+}
+
+fn repo_err(error: RepositoryError) -> ApiErr {
+    if let RepositoryError::Database(sqlx::Error::Database(db_error)) = &error {
+        let msg = db_error.message();
+        if msg.contains("UNIQUE constraint failed: provider_profiles.name") {
+            return AppError::conflict("provider profile name already exists");
+        }
+    }
+    tracing::error!("repository error: {error}");
+    AppError::internal("internal server error")
+}
+
+fn session_err(e: SessionError) -> ApiErr {
+    let status = match &e {
+        SessionError::NotFound | SessionError::AgentNotFound | SessionError::ProviderProfileNotFound => StatusCode::NOT_FOUND,
+        SessionError::NoDefaultProviderProfile | SessionError::EmptyContent => StatusCode::BAD_REQUEST,
+        SessionError::Runtime(_) => StatusCode::BAD_GATEWAY,
+        SessionError::Repository(_) => StatusCode::INTERNAL_SERVER_ERROR,
+    };
+    let msg = if matches!(e, SessionError::Repository(_)) {
+        "internal server error".to_string()
+    } else {
+        e.to_string()
+    };
+    (status, Json(AppError { error: msg }))
+}
+
+fn speedwagon_err(e: SpeedwagonError) -> ApiErr {
+    let status = match &e {
+        SpeedwagonError::NotFound => StatusCode::NOT_FOUND,
+        SpeedwagonError::AlreadyIndexing => StatusCode::CONFLICT,
+        SpeedwagonError::NoSources => StatusCode::UNPROCESSABLE_ENTITY,
+        SpeedwagonError::EmptyName => StatusCode::BAD_REQUEST,
+        SpeedwagonError::Repository(_) => StatusCode::INTERNAL_SERVER_ERROR,
+    };
+    let msg = if matches!(e, SpeedwagonError::Repository(_)) {
+        "internal server error".to_string()
+    } else {
+        e.to_string()
+    };
+    (status, Json(AppError { error: msg }))
+}
 
 #[derive(Serialize, JsonSchema)]
 struct HealthResponse {
@@ -36,76 +101,72 @@ struct HealthResponse {
 
 pub fn router(state: AppState_) -> ApiRouter {
     ApiRouter::new()
-        .route("/health", get(health))
-        .route("/agents", get(list_agents).post(create_agent))
-        .route(
+        .api_route("/health", get(health))
+        .api_route("/agents", get(list_agents).post(create_agent))
+        .api_route(
             "/agents/{id}",
             get(get_agent).put(update_agent).delete(delete_agent),
         )
-        .route(
+        .api_route(
             "/provider-profiles",
             get(list_provider_profiles).post(create_provider_profile),
         )
-        .route(
+        .api_route(
             "/provider-profiles/{id}",
             get(get_provider_profile)
                 .put(update_provider_profile)
                 .delete(delete_provider_profile),
         )
-        .route("/sessions", get(list_sessions).post(create_session))
-        .route(
+        .api_route("/sessions", get(list_sessions).post(create_session))
+        .api_route(
             "/sessions/{id}",
             get(get_session).put(update_session).delete(delete_session),
         )
-        .route("/sessions/{id}/messages/stream", post(add_message_streaming))
-        .route("/sessions/{id}/tool-calls", get(get_session_tool_calls))
-        .route("/sources", get(list_sources).post(upload_source))
-        .route("/sources/{id}", get(get_source).delete(delete_source))
-        .route(
+        .api_route("/sessions/{id}/messages/stream", post(add_message_streaming))
+        .api_route("/sessions/{id}/tool-calls", get(get_session_tool_calls))
+        .api_route("/sources", get(list_sources).post(upload_source))
+        .api_route("/sources/{id}", get(get_source).delete(delete_source))
+        .api_route(
             "/speedwagons",
             get(list_speedwagons).post(create_speedwagon),
         )
-        .route(
+        .api_route(
             "/speedwagons/{id}",
             get(get_speedwagon)
                 .put(update_speedwagon)
                 .delete(delete_speedwagon),
         )
-        .route("/speedwagons/{id}/index", post(index_speedwagon))
+        .api_route("/speedwagons/{id}/index", post(index_speedwagon))
         .with_state(state)
 }
 
-async fn health() -> Response {
-    Json(HealthResponse { status: "ok" }).into_response()
+async fn health() -> Json<HealthResponse> {
+    Json(HealthResponse { status: "ok" })
 }
 
 async fn create_agent(
     State(state): State<AppState_>,
     Json(payload): Json<CreateAgentRequest>,
-) -> Response {
+) -> Result<(StatusCode, Json<AgentResponse>), (StatusCode, Json<AppError>)> {
     let CreateAgentRequest { spec } = payload;
-
-    match state.repository.create_agent(spec).await {
-        Ok(agent) => (StatusCode::CREATED, Json(to_agent_response(&agent))).into_response(),
-        Err(error) => repository_error_response(error),
-    }
+    let agent = state.repository.create_agent(spec).await.map_err(repo_err)?;
+    Ok((StatusCode::CREATED, Json(to_agent_response(&agent))))
 }
 
-async fn list_agents(State(state): State<AppState_>) -> Response {
-    match state.repository.list_agents().await {
-        Ok(agents) => {
-            let response: Vec<AgentResponse> = agents.iter().map(to_agent_response).collect();
-            Json(response).into_response()
-        }
-        Err(error) => repository_error_response(error),
-    }
+async fn list_agents(
+    State(state): State<AppState_>,
+) -> Result<Json<Vec<AgentResponse>>, (StatusCode, Json<AppError>)> {
+    let agents = state.repository.list_agents().await.map_err(repo_err)?;
+    Ok(Json(agents.iter().map(to_agent_response).collect()))
 }
 
-async fn get_agent(State(state): State<AppState_>, Path(id): Path<Uuid>) -> Response {
-    match state.repository.get_agent(id).await {
-        Ok(Some(agent)) => Json(to_agent_response(&agent)).into_response(),
-        Ok(None) => json_error(StatusCode::NOT_FOUND, "agent not found"),
-        Err(error) => repository_error_response(error),
+async fn get_agent(
+    State(state): State<AppState_>,
+    Path(id): Path<Uuid>,
+) -> Result<Json<AgentResponse>, (StatusCode, Json<AppError>)> {
+    match state.repository.get_agent(id).await.map_err(repo_err)? {
+        Some(agent) => Ok(Json(to_agent_response(&agent))),
+        None => Err(AppError::not_found("agent not found")),
     }
 }
 
@@ -113,42 +174,39 @@ async fn update_agent(
     State(state): State<AppState_>,
     Path(id): Path<Uuid>,
     Json(payload): Json<UpdateAgentRequest>,
-) -> Response {
+) -> Result<Json<AgentResponse>, (StatusCode, Json<AppError>)> {
     let UpdateAgentRequest { spec } = payload;
-
-    match state.repository.update_agent(id, spec).await {
-        Ok(Some(agent)) => {
+    match state.repository.update_agent(id, spec).await.map_err(repo_err)? {
+        Some(agent) => {
             state.invalidate_runtimes_by_agent_id(id);
-            Json(to_agent_response(&agent)).into_response()
+            Ok(Json(to_agent_response(&agent)))
         }
-        Ok(None) => json_error(StatusCode::NOT_FOUND, "agent not found"),
-        Err(error) => repository_error_response(error),
+        None => Err(AppError::not_found("agent not found")),
     }
 }
 
-async fn delete_agent(State(state): State<AppState_>, Path(id): Path<Uuid>) -> Response {
-    match state.repository.has_sessions_for_agent(id).await {
-        Ok(true) => {
-            return json_error(
-                StatusCode::CONFLICT,
-                "cannot delete agent with existing sessions",
-            );
-        }
-        Ok(false) => {}
-        Err(error) => return repository_error_response(error),
+async fn delete_agent(
+    State(state): State<AppState_>,
+    Path(id): Path<Uuid>,
+) -> Result<StatusCode, (StatusCode, Json<AppError>)> {
+    if state
+        .repository
+        .has_sessions_for_agent(id)
+        .await
+        .map_err(repo_err)?
+    {
+        return Err(AppError::conflict("cannot delete agent with existing sessions"));
     }
-
-    match state.repository.delete_agent(id).await {
-        Ok(true) => StatusCode::NO_CONTENT.into_response(),
-        Ok(false) => json_error(StatusCode::NOT_FOUND, "agent not found"),
-        Err(error) => repository_error_response(error),
+    match state.repository.delete_agent(id).await.map_err(repo_err)? {
+        true => Ok(StatusCode::NO_CONTENT),
+        false => Err(AppError::not_found("agent not found")),
     }
 }
 
 async fn create_provider_profile(
     State(state): State<AppState_>,
     Json(payload): Json<CreateProviderProfileRequest>,
-) -> Response {
+) -> Result<(StatusCode, Json<ProviderProfileResponse>), (StatusCode, Json<AppError>)> {
     let CreateProviderProfileRequest {
         name,
         provider,
@@ -156,39 +214,31 @@ async fn create_provider_profile(
     } = payload;
 
     if name.trim().is_empty() {
-        return json_error(StatusCode::BAD_REQUEST, "provider profile name is empty");
+        return Err(AppError::bad_request("provider profile name is empty"));
     }
 
-    match state
+    let profile = state
         .repository
         .create_provider_profile(name, provider, is_default)
         .await
-    {
-        Ok(profile) => (
-            StatusCode::CREATED,
-            Json(to_provider_profile_response(&profile)),
-        )
-            .into_response(),
-        Err(error) => repository_error_response(error),
-    }
+        .map_err(repo_err)?;
+    Ok((StatusCode::CREATED, Json(to_provider_profile_response(&profile))))
 }
 
-async fn list_provider_profiles(State(state): State<AppState_>) -> Response {
-    match state.repository.list_provider_profiles().await {
-        Ok(profiles) => {
-            let response: Vec<ProviderProfileResponse> =
-                profiles.iter().map(to_provider_profile_response).collect();
-            Json(response).into_response()
-        }
-        Err(error) => repository_error_response(error),
-    }
+async fn list_provider_profiles(
+    State(state): State<AppState_>,
+) -> Result<Json<Vec<ProviderProfileResponse>>, (StatusCode, Json<AppError>)> {
+    let profiles = state.repository.list_provider_profiles().await.map_err(repo_err)?;
+    Ok(Json(profiles.iter().map(to_provider_profile_response).collect()))
 }
 
-async fn get_provider_profile(State(state): State<AppState_>, Path(id): Path<Uuid>) -> Response {
-    match state.repository.get_provider_profile(id).await {
-        Ok(Some(profile)) => Json(to_provider_profile_response(&profile)).into_response(),
-        Ok(None) => json_error(StatusCode::NOT_FOUND, "provider profile not found"),
-        Err(error) => repository_error_response(error),
+async fn get_provider_profile(
+    State(state): State<AppState_>,
+    Path(id): Path<Uuid>,
+) -> Result<Json<ProviderProfileResponse>, (StatusCode, Json<AppError>)> {
+    match state.repository.get_provider_profile(id).await.map_err(repo_err)? {
+        Some(profile) => Ok(Json(to_provider_profile_response(&profile))),
+        None => Err(AppError::not_found("provider profile not found")),
     }
 }
 
@@ -196,7 +246,7 @@ async fn update_provider_profile(
     State(state): State<AppState_>,
     Path(id): Path<Uuid>,
     Json(payload): Json<UpdateProviderProfileRequest>,
-) -> Response {
+) -> Result<Json<ProviderProfileResponse>, (StatusCode, Json<AppError>)> {
     let UpdateProviderProfileRequest {
         name,
         provider,
@@ -204,80 +254,85 @@ async fn update_provider_profile(
     } = payload;
 
     if name.trim().is_empty() {
-        return json_error(StatusCode::BAD_REQUEST, "provider profile name is empty");
+        return Err(AppError::bad_request("provider profile name is empty"));
     }
 
     match state
         .repository
         .update_provider_profile(id, name, provider, is_default)
         .await
+        .map_err(repo_err)?
     {
-        Ok(Some(profile)) => {
+        Some(profile) => {
             state.invalidate_runtimes_by_provider_profile_id(id);
-            Json(to_provider_profile_response(&profile)).into_response()
+            Ok(Json(to_provider_profile_response(&profile)))
         }
-        Ok(None) => json_error(StatusCode::NOT_FOUND, "provider profile not found"),
-        Err(error) => repository_error_response(error),
+        None => Err(AppError::not_found("provider profile not found")),
     }
 }
 
-async fn delete_provider_profile(State(state): State<AppState_>, Path(id): Path<Uuid>) -> Response {
-    match state.repository.has_sessions_for_provider_profile(id).await {
-        Ok(true) => {
-            return json_error(
-                StatusCode::CONFLICT,
-                "cannot delete provider profile with existing sessions",
-            );
-        }
-        Ok(false) => {}
-        Err(error) => return repository_error_response(error),
+async fn delete_provider_profile(
+    State(state): State<AppState_>,
+    Path(id): Path<Uuid>,
+) -> Result<StatusCode, (StatusCode, Json<AppError>)> {
+    if state
+        .repository
+        .has_sessions_for_provider_profile(id)
+        .await
+        .map_err(repo_err)?
+    {
+        return Err(AppError::conflict(
+            "cannot delete provider profile with existing sessions",
+        ));
     }
-
-    match state.repository.delete_provider_profile(id).await {
-        Ok(true) => StatusCode::NO_CONTENT.into_response(),
-        Ok(false) => json_error(StatusCode::NOT_FOUND, "provider profile not found"),
-        Err(error) => repository_error_response(error),
+    match state
+        .repository
+        .delete_provider_profile(id)
+        .await
+        .map_err(repo_err)?
+    {
+        true => Ok(StatusCode::NO_CONTENT),
+        false => Err(AppError::not_found("provider profile not found")),
     }
 }
 
 async fn create_session(
     State(state): State<AppState_>,
     Json(payload): Json<CreateSessionRequest>,
-) -> Response {
-    match session_service::create_session(&state, payload).await {
-        Ok(session) => (StatusCode::CREATED, Json(SessionResponse::from(&session))).into_response(),
-        Err(e) => e.into_response(),
-    }
+) -> Result<(StatusCode, Json<SessionResponse>), (StatusCode, Json<AppError>)> {
+    let session = session_service::create_session(&state, payload)
+        .await
+        .map_err(|e| AppError::internal(e.to_string()))?;
+    Ok((StatusCode::CREATED, Json(SessionResponse::from(&session))))
 }
 
 async fn list_sessions(
     State(state): State<AppState_>,
     Query(query): Query<ListSessionsQuery>,
-) -> Response {
+) -> Result<Json<Vec<SessionResponse>>, (StatusCode, Json<AppError>)> {
     let ListSessionsQuery {
         agent_id,
         include_messages,
     } = query;
 
-    match state
+    let sessions = state
         .repository
         .list_sessions(agent_id, include_messages.unwrap_or(false))
         .await
-    {
-        Ok(sessions) => {
-            let response: Vec<SessionResponse> =
-                sessions.iter().map(SessionResponse::from).collect();
-            Json(response).into_response()
-        }
-        Err(error) => repository_error_response(error),
-    }
+        .map_err(repo_err)?;
+    Ok(Json(sessions.iter().map(SessionResponse::from).collect()))
 }
 
-async fn get_session(State(state): State<AppState_>, Path(id): Path<Uuid>) -> Response {
-    match session_service::get_session_detail(&state, id).await {
-        Ok(Some(detail)) => Json(detail).into_response(),
-        Ok(None) => json_error(StatusCode::NOT_FOUND, "session not found"),
-        Err(e) => e.into_response(),
+async fn get_session(
+    State(state): State<AppState_>,
+    Path(id): Path<Uuid>,
+) -> ApiResult<Json<SessionDetailResponse>> {
+    match session_service::get_session_detail(&state, id)
+        .await
+        .map_err(session_err)?
+    {
+        Some(detail) => Ok(Json(detail)),
+        None => Err(AppError::not_found("session not found")),
     }
 }
 
@@ -285,30 +340,33 @@ async fn update_session(
     State(state): State<AppState_>,
     Path(id): Path<Uuid>,
     Json(payload): Json<UpdateSessionRequest>,
-) -> Response {
-    match session_service::update_session(&state, id, payload).await {
-        Ok(session) => Json(SessionResponse::from(&session)).into_response(),
-        Err(e) => e.into_response(),
-    }
+) -> Result<Json<SessionResponse>, (StatusCode, Json<AppError>)> {
+    let session = session_service::update_session(&state, id, payload)
+        .await
+        .map_err(|e| AppError::internal(e.to_string()))?;
+    Ok(Json(SessionResponse::from(&session)))
 }
 
-async fn delete_session(State(state): State<AppState_>, Path(id): Path<Uuid>) -> Response {
-    match session_service::delete_session(&state, id).await {
-        Ok(()) => StatusCode::NO_CONTENT.into_response(),
-        Err(e) => e.into_response(),
-    }
+async fn delete_session(
+    State(state): State<AppState_>,
+    Path(id): Path<Uuid>,
+) -> Result<StatusCode, (StatusCode, Json<AppError>)> {
+    session_service::delete_session(&state, id)
+        .await
+        .map_err(|e| AppError::internal(e.to_string()))?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 async fn add_message_streaming(
     State(state): State<AppState_>,
     Path(id): Path<Uuid>,
-    Json(payload): Json<AddSessionMessageRequest>,
-) -> Response {
+    NoApi(Json(payload)): NoApi<Json<AddSessionMessageRequest>>,
+) -> NoApi<Response> {
     let AddSessionMessageRequest { content } = payload;
 
     let event_stream = match session_service::send_message_streaming(&state, id, content).await {
         Ok(stream) => stream,
-        Err(e) => return e.into_response(),
+        Err(e) => return NoApi(e.into_response()),
     };
 
     let sse_stream = event_stream.map(|event_result| {
@@ -330,28 +388,31 @@ async fn add_message_streaming(
         Ok::<Event, Infallible>(Event::default().event(event_type).data(data))
     });
 
-    Sse::new(sse_stream)
-        .keep_alive(KeepAlive::default())
-        .into_response()
+    NoApi(
+        Sse::new(sse_stream)
+            .keep_alive(KeepAlive::default())
+            .into_response(),
+    )
 }
 
 async fn get_session_tool_calls(
     State(state): State<AppState_>,
     Path(session_id): Path<Uuid>,
-) -> Response {
-    match state
+) -> Result<Response, (StatusCode, Json<AppError>)> {
+    let tool_calls = state
         .repository
         .get_tool_calls_for_session(session_id)
         .await
-    {
-        Ok(tool_calls) => Json(tool_calls).into_response(),
-        Err(error) => repository_error_response(error),
-    }
+        .map_err(repo_err)?;
+    Ok(Json(tool_calls).into_response())
 }
 
 // ===================== Source Handlers =====================
 
-async fn upload_source(State(state): State<AppState_>, mut multipart: Multipart) -> Response {
+async fn upload_source(
+    State(state): State<AppState_>,
+    NoApi(mut multipart): NoApi<Multipart>,
+) -> NoApi<Response> {
     let mut file_name = String::new();
     let mut file_bytes: Vec<u8> = Vec::new();
 
@@ -363,7 +424,7 @@ async fn upload_source(State(state): State<AppState_>, mut multipart: Multipart)
             Ok(bytes) => file_bytes.extend_from_slice(&bytes),
             Err(e) => {
                 tracing::error!("failed to read multipart field: {e}");
-                return json_error(StatusCode::BAD_REQUEST, "failed to read file");
+                return NoApi(json_error(StatusCode::BAD_REQUEST, "failed to read file"));
             }
         }
         // Only handle the first file
@@ -371,7 +432,7 @@ async fn upload_source(State(state): State<AppState_>, mut multipart: Multipart)
     }
 
     if file_name.is_empty() || file_bytes.is_empty() {
-        return json_error(StatusCode::BAD_REQUEST, "no file in request");
+        return NoApi(json_error(StatusCode::BAD_REQUEST, "no file in request"));
     }
 
     let size = file_bytes.len() as i64;
@@ -388,16 +449,16 @@ async fn upload_source(State(state): State<AppState_>, mut multipart: Multipart)
     let upload_dir = state.upload_dir.clone();
     if let Err(error) = tokio::fs::create_dir_all(&upload_dir).await {
         tracing::error!("failed to create upload dir: {error}");
-        return json_error(
+        return NoApi(json_error(
             StatusCode::INTERNAL_SERVER_ERROR,
             "failed to create upload directory",
-        );
+        ));
     }
 
     let file_path = upload_dir.join(&stored_name);
     if let Err(error) = tokio::fs::write(&file_path, &file_bytes).await {
         tracing::error!("failed to write file: {error}");
-        return json_error(StatusCode::INTERNAL_SERVER_ERROR, "failed to write file");
+        return NoApi(json_error(StatusCode::INTERNAL_SERVER_ERROR, "failed to write file"));
     }
 
     let file_path_str = file_path.to_string_lossy().to_string();
@@ -407,39 +468,42 @@ async fn upload_source(State(state): State<AppState_>, mut multipart: Multipart)
         .create_source(file_name, SourceType::LocalFile, Some(file_path_str), size)
         .await
     {
-        Ok(source) => (StatusCode::CREATED, Json(SourceResponse::from(&source))).into_response(),
-        Err(error) => repository_error_response(error),
+        Ok(source) => NoApi(
+            (StatusCode::CREATED, Json(SourceResponse::from(&source))).into_response(),
+        ),
+        Err(error) => NoApi(repository_error_response(error)),
     }
 }
 
-async fn list_sources(State(state): State<AppState_>) -> Response {
-    match state.repository.list_sources().await {
-        Ok(sources) => {
-            let response: Vec<SourceResponse> = sources.iter().map(SourceResponse::from).collect();
-            Json(response).into_response()
-        }
-        Err(error) => repository_error_response(error),
+async fn list_sources(
+    State(state): State<AppState_>,
+) -> Result<Json<Vec<SourceResponse>>, (StatusCode, Json<AppError>)> {
+    let sources = state.repository.list_sources().await.map_err(repo_err)?;
+    Ok(Json(sources.iter().map(SourceResponse::from).collect()))
+}
+
+async fn get_source(
+    State(state): State<AppState_>,
+    Path(id): Path<Uuid>,
+) -> Result<Json<SourceResponse>, (StatusCode, Json<AppError>)> {
+    match state.repository.get_source(id).await.map_err(repo_err)? {
+        Some(source) => Ok(Json(SourceResponse::from(&source))),
+        None => Err(AppError::not_found("source not found")),
     }
 }
 
-async fn get_source(State(state): State<AppState_>, Path(id): Path<Uuid>) -> Response {
-    match state.repository.get_source(id).await {
-        Ok(Some(source)) => Json(SourceResponse::from(&source)).into_response(),
-        Ok(None) => json_error(StatusCode::NOT_FOUND, "source not found"),
-        Err(error) => repository_error_response(error),
-    }
-}
-
-async fn delete_source(State(state): State<AppState_>, Path(id): Path<Uuid>) -> Response {
+async fn delete_source(
+    State(state): State<AppState_>,
+    Path(id): Path<Uuid>,
+) -> Result<StatusCode, (StatusCode, Json<AppError>)> {
     // Get file_path before deleting from DB
-    let file_path = match state.repository.get_source(id).await {
-        Ok(Some(source)) => source.file_path,
-        Ok(None) => return json_error(StatusCode::NOT_FOUND, "source not found"),
-        Err(error) => return repository_error_response(error),
+    let file_path = match state.repository.get_source(id).await.map_err(repo_err)? {
+        Some(source) => source.file_path,
+        None => return Err(AppError::not_found("source not found")),
     };
 
-    match state.repository.delete_source(id).await {
-        Ok(true) => {
+    match state.repository.delete_source(id).await.map_err(repo_err)? {
+        true => {
             // Delete file from disk
             if let Some(path) = &file_path {
                 if let Err(error) = tokio::fs::remove_file(path).await {
@@ -469,10 +533,9 @@ async fn delete_source(State(state): State<AppState_>, Path(id): Path<Uuid>) -> 
                 }
             }
 
-            StatusCode::NO_CONTENT.into_response()
+            Ok(StatusCode::NO_CONTENT)
         }
-        Ok(false) => json_error(StatusCode::NOT_FOUND, "source not found"),
-        Err(error) => repository_error_response(error),
+        false => Err(AppError::not_found("source not found")),
     }
 }
 
@@ -481,29 +544,27 @@ async fn delete_source(State(state): State<AppState_>, Path(id): Path<Uuid>) -> 
 async fn create_speedwagon(
     State(state): State<AppState_>,
     Json(payload): Json<CreateSpeedwagonRequest>,
-) -> Response {
-    match speedwagon_service::create_speedwagon(&state, payload).await {
-        Ok(sw) => (StatusCode::CREATED, Json(SpeedwagonResponse::from(&sw))).into_response(),
-        Err(e) => e.into_response(),
-    }
+) -> Result<(StatusCode, Json<SpeedwagonResponse>), (StatusCode, Json<AppError>)> {
+    let sw = speedwagon_service::create_speedwagon(&state, payload)
+        .await
+        .map_err(speedwagon_err)?;
+    Ok((StatusCode::CREATED, Json(SpeedwagonResponse::from(&sw))))
 }
 
-async fn list_speedwagons(State(state): State<AppState_>) -> Response {
-    match state.repository.list_speedwagons().await {
-        Ok(list) => {
-            let response: Vec<SpeedwagonResponse> =
-                list.iter().map(SpeedwagonResponse::from).collect();
-            Json(response).into_response()
-        }
-        Err(error) => repository_error_response(error),
-    }
+async fn list_speedwagons(
+    State(state): State<AppState_>,
+) -> Result<Json<Vec<SpeedwagonResponse>>, (StatusCode, Json<AppError>)> {
+    let list = state.repository.list_speedwagons().await.map_err(repo_err)?;
+    Ok(Json(list.iter().map(SpeedwagonResponse::from).collect()))
 }
 
-async fn get_speedwagon(State(state): State<AppState_>, Path(id): Path<Uuid>) -> Response {
-    match state.repository.get_speedwagon(id).await {
-        Ok(Some(sw)) => Json(SpeedwagonResponse::from(&sw)).into_response(),
-        Ok(None) => json_error(StatusCode::NOT_FOUND, "speedwagon not found"),
-        Err(error) => repository_error_response(error),
+async fn get_speedwagon(
+    State(state): State<AppState_>,
+    Path(id): Path<Uuid>,
+) -> Result<Json<SpeedwagonResponse>, (StatusCode, Json<AppError>)> {
+    match state.repository.get_speedwagon(id).await.map_err(repo_err)? {
+        Some(sw) => Ok(Json(SpeedwagonResponse::from(&sw))),
+        None => Err(AppError::not_found("speedwagon not found")),
     }
 }
 
@@ -511,25 +572,30 @@ async fn update_speedwagon(
     State(state): State<AppState_>,
     Path(id): Path<Uuid>,
     Json(payload): Json<UpdateSpeedwagonRequest>,
-) -> Response {
-    match speedwagon_service::update_speedwagon(&state, id, payload).await {
-        Ok(sw) => Json(SpeedwagonResponse::from(&sw)).into_response(),
-        Err(e) => e.into_response(),
-    }
+) -> Result<Json<SpeedwagonResponse>, (StatusCode, Json<AppError>)> {
+    let sw = speedwagon_service::update_speedwagon(&state, id, payload)
+        .await
+        .map_err(speedwagon_err)?;
+    Ok(Json(SpeedwagonResponse::from(&sw)))
 }
 
-async fn delete_speedwagon(State(state): State<AppState_>, Path(id): Path<Uuid>) -> Response {
-    match speedwagon_service::delete_speedwagon(&state, id).await {
-        Ok(()) => StatusCode::NO_CONTENT.into_response(),
-        Err(e) => e.into_response(),
-    }
+async fn delete_speedwagon(
+    State(state): State<AppState_>,
+    Path(id): Path<Uuid>,
+) -> Result<StatusCode, (StatusCode, Json<AppError>)> {
+    speedwagon_service::delete_speedwagon(&state, id)
+        .await
+        .map_err(speedwagon_err)?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
-async fn index_speedwagon(State(state): State<AppState_>, Path(id): Path<Uuid>) -> Response {
-    let sw = match speedwagon_service::start_indexing(&state, id).await {
-        Ok(sw) => sw,
-        Err(e) => return e.into_response(),
-    };
+async fn index_speedwagon(
+    State(state): State<AppState_>,
+    Path(id): Path<Uuid>,
+) -> Result<StatusCode, (StatusCode, Json<AppError>)> {
+    let sw = speedwagon_service::start_indexing(&state, id)
+        .await
+        .map_err(speedwagon_err)?;
 
     let repository = Arc::clone(&state.repository);
     let speedwagon_data_dir = state.speedwagon_data_dir.clone();
@@ -545,7 +611,7 @@ async fn index_speedwagon(State(state): State<AppState_>, Path(id): Path<Uuid>) 
         .await;
     });
 
-    StatusCode::ACCEPTED.into_response()
+    Ok(StatusCode::ACCEPTED)
 }
 
 fn to_agent_response(agent: &Agent) -> AgentResponse {

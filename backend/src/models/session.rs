@@ -149,7 +149,7 @@ impl From<(Session, Vec<SessionToolCall>)> for SessionDetailResponse {
 
 // --- Request DTOs ---
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, JsonSchema)]
 pub struct ListSessionsQuery {
     pub agent_id: Option<Uuid>,
     pub include_messages: Option<bool>,

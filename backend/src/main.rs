@@ -8,8 +8,11 @@ mod state;
 
 use std::sync::Arc;
 
+use aide::axum::ApiRouter;
 use aide::openapi::{Info, OpenApi};
+use aide::scalar::Scalar;
 use axum::Extension;
+use axum::response::IntoResponse;
 use tower_http::cors::{Any, CorsLayer};
 
 use crate::state::AppState;
@@ -49,11 +52,23 @@ async fn main() -> std::io::Result<()> {
 
     let app = handlers::router(app_state)
         .finish_api(&mut openapi)
+        .merge(
+            ApiRouter::new()
+                .route("/api-docs/openapi.json", axum::routing::get(serve_openapi))
+                .route("/docs", axum::routing::get(Scalar::new("/api-docs/openapi.json").axum_handler()))
+        )
         .layer(Extension(Arc::new(openapi)))
         .layer(cors);
 
+    tracing::info!("API docs available at http://{bind_addr}/docs");
+
     tracing::info!("server listening on http://{bind_addr}");
+    tracing::info!("API docs: http://{bind_addr}/docs");
 
     let listener = tokio::net::TcpListener::bind(&bind_addr).await?;
     axum::serve(listener, app).await
+}
+
+async fn serve_openapi(Extension(openapi): Extension<Arc<OpenApi>>) -> impl IntoResponse {
+    axum::Json(openapi.as_ref().clone())
 }
