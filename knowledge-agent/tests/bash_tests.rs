@@ -273,7 +273,6 @@ fn allowed_unzip_list() {
     assert!(validate_command("unzip -l archive.zip").is_ok());
 }
 
-
 // ── Grey zone: dangerous compositions ──────────────────────────────────
 
 #[test]

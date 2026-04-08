@@ -15,7 +15,10 @@ static INIT_INDEX: Once = Once::new();
 
 fn ensure_index() -> SearchIndex {
     INIT_INDEX.call_once(|| {
-        let settings = IndexSettings { schema_version: 1, no_merge: false };
+        let settings = IndexSettings {
+            schema_version: 1,
+            no_merge: false,
+        };
         check_or_build_index(
             Path::new(INDEX_DIR),
             Path::new(&books_dir()),

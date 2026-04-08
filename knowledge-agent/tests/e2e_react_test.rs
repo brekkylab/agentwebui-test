@@ -128,7 +128,10 @@ async fn test_e2e_react_financebench() {
     dotenvy::from_path(concat!(env!("CARGO_MANIFEST_DIR"), "/../.env")).ok();
 
     // 1. Index
-    let settings = IndexSettings { schema_version: 1, no_merge: false };
+    let settings = IndexSettings {
+        schema_version: 1,
+        no_merge: false,
+    };
     check_or_build_index(&finance_index_dir(), &md_dir(), &settings, true, false)
         .expect("indexing failed");
     let search_index =
@@ -308,7 +311,10 @@ async fn test_e2e_react_novelqa() {
 
     // 1. Index
     let bdir = books_dir();
-    let settings = IndexSettings { schema_version: 1, no_merge: false };
+    let settings = IndexSettings {
+        schema_version: 1,
+        no_merge: false,
+    };
     check_or_build_index(&novel_index_dir(), Path::new(&bdir), &settings, true, false)
         .expect("indexing failed");
     let search_index =

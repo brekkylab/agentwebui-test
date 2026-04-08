@@ -19,7 +19,9 @@ fn allowed_datetime() {
 
 #[test]
 fn allowed_collections() {
-    assert!(validate_python_code("from collections import Counter\nprint(Counter([1,2,2,3]))").is_ok());
+    assert!(
+        validate_python_code("from collections import Counter\nprint(Counter([1,2,2,3]))").is_ok()
+    );
 }
 
 #[test]

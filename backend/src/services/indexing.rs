@@ -136,7 +136,15 @@ pub async fn start_indexing(
         Err(e) => {
             tracing::error!("[indexing] failed to collect sources for speedwagon {id}: {e}");
             let _ = repository
-                .update_speedwagon_index_status(id, SpeedwagonIndexStatus::Error, Some(e.clone()), None, None, None, None)
+                .update_speedwagon_index_status(
+                    id,
+                    SpeedwagonIndexStatus::Error,
+                    Some(e.clone()),
+                    None,
+                    None,
+                    None,
+                    None,
+                )
                 .await;
             return Err(e);
         }
@@ -145,7 +153,15 @@ pub async fn start_indexing(
     // File limit validation
     if let Err(msg) = validate_file_limits(&sources) {
         let _ = repository
-            .update_speedwagon_index_status(id, SpeedwagonIndexStatus::Error, Some(msg.clone()), None, None, None, None)
+            .update_speedwagon_index_status(
+                id,
+                SpeedwagonIndexStatus::Error,
+                Some(msg.clone()),
+                None,
+                None,
+                None,
+                None,
+            )
             .await;
         return Err(msg);
     }
@@ -158,7 +174,15 @@ pub async fn start_indexing(
         Ok(dirs) => dirs,
         Err(msg) => {
             let _ = repository
-                .update_speedwagon_index_status(id, SpeedwagonIndexStatus::Error, Some(msg.clone()), None, None, None, None)
+                .update_speedwagon_index_status(
+                    id,
+                    SpeedwagonIndexStatus::Error,
+                    Some(msg.clone()),
+                    None,
+                    None,
+                    None,
+                    None,
+                )
                 .await;
             return Err(msg);
         }
@@ -174,9 +198,26 @@ pub async fn start_indexing(
 
     match index_result {
         Ok(Ok(_report)) => {
-            if let Err(msg) = finalize_indexing(&repository, &state, id, &index_tmp_dir, &index_dir, &corpus_dir).await {
+            if let Err(msg) = finalize_indexing(
+                &repository,
+                &state,
+                id,
+                &index_tmp_dir,
+                &index_dir,
+                &corpus_dir,
+            )
+            .await
+            {
                 let _ = repository
-                    .update_speedwagon_index_status(id, SpeedwagonIndexStatus::Error, Some(msg.clone()), None, None, None, None)
+                    .update_speedwagon_index_status(
+                        id,
+                        SpeedwagonIndexStatus::Error,
+                        Some(msg.clone()),
+                        None,
+                        None,
+                        None,
+                        None,
+                    )
                     .await;
                 return Err(msg);
             }
@@ -190,7 +231,15 @@ pub async fn start_indexing(
             let msg = format!("indexing failed: {e}");
             tracing::error!("[indexing] speedwagon {id} error: {msg}");
             let _ = repository
-                .update_speedwagon_index_status(id, SpeedwagonIndexStatus::Error, Some(msg.clone()), None, None, None, None)
+                .update_speedwagon_index_status(
+                    id,
+                    SpeedwagonIndexStatus::Error,
+                    Some(msg.clone()),
+                    None,
+                    None,
+                    None,
+                    None,
+                )
                 .await;
             Err(msg)
         }
@@ -201,7 +250,15 @@ pub async fn start_indexing(
             let msg = format!("spawn_blocking panicked: {e}");
             tracing::error!("[indexing] speedwagon {id} panic: {msg}");
             let _ = repository
-                .update_speedwagon_index_status(id, SpeedwagonIndexStatus::Error, Some(msg.clone()), None, None, None, None)
+                .update_speedwagon_index_status(
+                    id,
+                    SpeedwagonIndexStatus::Error,
+                    Some(msg.clone()),
+                    None,
+                    None,
+                    None,
+                    None,
+                )
                 .await;
             Err(msg)
         }

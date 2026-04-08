@@ -56,7 +56,11 @@ impl SubAgentProvider {
     /// Extract API credentials from the parent agent's provider.
     pub fn from_provider(provider: &ailoy::AgentProvider) -> Self {
         match &provider.lm {
-            ailoy::LangModelProvider::API { schema, url, api_key } => Self {
+            ailoy::LangModelProvider::API {
+                schema,
+                url,
+                api_key,
+            } => Self {
                 api_key: api_key.clone().unwrap_or_default(),
                 api_url: url.clone(),
                 schema: schema.clone(),
@@ -64,4 +68,3 @@ impl SubAgentProvider {
         }
     }
 }
-

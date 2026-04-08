@@ -10,7 +10,10 @@ use std::path::Path;
 use knowledge_agent::{IndexSettings, SearchIndex, sync_or_build_multi};
 
 fn settings() -> IndexSettings {
-    IndexSettings { schema_version: 1, no_merge: false }
+    IndexSettings {
+        schema_version: 1,
+        no_merge: false,
+    }
 }
 
 /// Create a temp dir with given text files. Returns the temp dir path.
@@ -32,11 +35,14 @@ fn full_build_then_noop() {
     let corpus = tmp.path().join("corpus");
     let index = tmp.path().join("index");
 
-    create_corpus(&corpus, &[
-        ("doc1.txt", "The quick brown fox jumps over the lazy dog."),
-        ("doc2.txt", "A tale of two cities by Charles Dickens."),
-        ("doc3.md", "# Revenue Report\nTotal revenue was $1 billion."),
-    ]);
+    create_corpus(
+        &corpus,
+        &[
+            ("doc1.txt", "The quick brown fox jumps over the lazy dog."),
+            ("doc2.txt", "A tale of two cities by Charles Dickens."),
+            ("doc3.md", "# Revenue Report\nTotal revenue was $1 billion."),
+        ],
+    );
 
     // Full build (no existing index)
     let report = sync_or_build_multi(&index, &[corpus.clone()], &settings(), false).unwrap();
@@ -58,17 +64,24 @@ fn incremental_add() {
     let index = tmp.path().join("index");
 
     // Start with 2 files
-    create_corpus(&corpus, &[
-        ("doc1.txt", "First document content."),
-        ("doc2.txt", "Second document content."),
-    ]);
+    create_corpus(
+        &corpus,
+        &[
+            ("doc1.txt", "First document content."),
+            ("doc2.txt", "Second document content."),
+        ],
+    );
 
     let report = sync_or_build_multi(&index, &[corpus.clone()], &settings(), false).unwrap();
     assert_eq!(report.success_count, 2);
     assert_eq!(indexed_count(&index), 2);
 
     // Add a third file
-    fs::write(corpus.join("doc3.md"), "# Third document\nNew content here.").unwrap();
+    fs::write(
+        corpus.join("doc3.md"),
+        "# Third document\nNew content here.",
+    )
+    .unwrap();
 
     let report = sync_or_build_multi(&index, &[corpus.clone()], &settings(), false).unwrap();
     // Should have indexed only the new file
@@ -83,11 +96,14 @@ fn incremental_delete() {
     let index = tmp.path().join("index");
 
     // Start with 3 files
-    create_corpus(&corpus, &[
-        ("doc1.txt", "First document."),
-        ("doc2.txt", "Second document."),
-        ("doc3.md", "Third document."),
-    ]);
+    create_corpus(
+        &corpus,
+        &[
+            ("doc1.txt", "First document."),
+            ("doc2.txt", "Second document."),
+            ("doc3.md", "Third document."),
+        ],
+    );
 
     let report = sync_or_build_multi(&index, &[corpus.clone()], &settings(), false).unwrap();
     assert_eq!(report.success_count, 3);
@@ -106,11 +122,14 @@ fn incremental_add_and_delete() {
     let corpus = tmp.path().join("corpus");
     let index = tmp.path().join("index");
 
-    create_corpus(&corpus, &[
-        ("doc1.txt", "Alpha."),
-        ("doc2.txt", "Bravo."),
-        ("doc3.md", "Charlie."),
-    ]);
+    create_corpus(
+        &corpus,
+        &[
+            ("doc1.txt", "Alpha."),
+            ("doc2.txt", "Bravo."),
+            ("doc3.md", "Charlie."),
+        ],
+    );
 
     sync_or_build_multi(&index, &[corpus.clone()], &settings(), false).unwrap();
     assert_eq!(indexed_count(&index), 3);

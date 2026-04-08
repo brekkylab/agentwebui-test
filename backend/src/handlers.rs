@@ -62,7 +62,11 @@ impl AppError {
 /// Non-Gemini providers pass through unchanged.
 fn normalize_provider(provider: AgentProvider) -> AgentProvider {
     let lm = match provider.lm {
-        LangModelProvider::API { schema, url, api_key } => {
+        LangModelProvider::API {
+            schema,
+            url,
+            api_key,
+        } => {
             let url = if matches!(schema, LangModelAPISchema::Gemini) {
                 let s = url.to_string();
                 if let Some(idx) = s.find("/models/") {
@@ -74,10 +78,17 @@ fn normalize_provider(provider: AgentProvider) -> AgentProvider {
             } else {
                 url
             };
-            LangModelProvider::API { schema, url, api_key }
+            LangModelProvider::API {
+                schema,
+                url,
+                api_key,
+            }
         }
     };
-    AgentProvider { lm, tools: provider.tools }
+    AgentProvider {
+        lm,
+        tools: provider.tools,
+    }
 }
 
 fn repo_err(error: RepositoryError) -> ApiErr {

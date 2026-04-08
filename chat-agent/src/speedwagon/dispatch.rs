@@ -6,10 +6,10 @@ use std::sync::Arc;
 
 use crate::error_value;
 
+use super::{ASK_SPEEDWAGON_TOOL, KbEntry, SubAgentProvider};
 use ailoy::agent::ToolFunc;
 use ailoy::{LangModelProvider, ToolDescBuilder, ToolRuntime, Value};
 use knowledge_agent::{AgentConfig, SearchIndex, ToolConfig, build_agent, run_with_trace};
-use super::{ASK_SPEEDWAGON_TOOL, KbEntry, SubAgentProvider};
 
 /// Grounding rules injected into every Speedwagon sub-agent system prompt.
 /// Prevents the sub-agent from reframing document content through its own
@@ -57,7 +57,12 @@ pub fn build_speedwagon_tool(
     }
 
     let desc = ask_speedwagon_desc(entries);
-    let func = ask_speedwagon_func(entries.to_vec(), default_provider, default_model_name, kb_overrides);
+    let func = ask_speedwagon_func(
+        entries.to_vec(),
+        default_provider,
+        default_model_name,
+        kb_overrides,
+    );
     Some((
         ASK_SPEEDWAGON_TOOL.to_string(),
         ToolRuntime::new(desc, func),
@@ -209,4 +214,3 @@ pub async fn dispatch_speedwagon(
     let (answer, _steps) = run_with_trace(&mut sub_agent, question).await?;
     Ok(answer)
 }
-

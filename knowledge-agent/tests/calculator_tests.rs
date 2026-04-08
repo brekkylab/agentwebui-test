@@ -282,8 +282,8 @@ fn log_two_arg() {
     // log(x, base) = log_base(x)
     assert!((calculate("log(8, 2)").unwrap() - 3.0).abs() < 1e-10);
     assert!((calculate("log(100, 10)").unwrap() - 2.0).abs() < 1e-10);
-    assert!(calculate("log(8, 1)").is_err());   // base = 1 invalid
-    assert!(calculate("log(8, -2)").is_err());  // negative base
+    assert!(calculate("log(8, 1)").is_err()); // base = 1 invalid
+    assert!(calculate("log(8, -2)").is_err()); // negative base
 }
 
 // ── Complex expressions ────────────────────────────────────────────────
