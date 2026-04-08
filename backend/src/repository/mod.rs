@@ -203,12 +203,12 @@ pub async fn create_repository_from_env() -> RepositoryResult<Arc<dyn Repository
 pub async fn create_repository(database_url: &str) -> RepositoryResult<Arc<dyn Repository>> {
     if database_url.starts_with("sqlite:") {
         let repository = SqliteRepository::new(database_url).await?;
-        return Ok(Arc::new(repository));
+        return Ok(Arc::new(repository) as Arc<dyn Repository>);
     }
 
     if database_url.starts_with("postgres://") || database_url.starts_with("postgresql://") {
         let repository = PostgresRepository::new(database_url).await?;
-        return Ok(Arc::new(repository));
+        return Ok(Arc::new(repository) as Arc<dyn Repository>);
     }
 
     Err(RepositoryError::InvalidDatabaseUrl(

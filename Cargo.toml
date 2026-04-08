@@ -7,4 +7,5 @@ members = [
 ]
 
 [workspace.dependencies]
-ailoy = { path = "../ailoy" }
+ailoy = { git = "https://github.com/brekkylab/ailoy.git", rev = "8fb7bb177003e9575fb380cf55cc5c908775dab2" }
+# ailoy = { path = "../ailoy" }

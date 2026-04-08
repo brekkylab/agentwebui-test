@@ -90,7 +90,7 @@ function ToolCallFallback({ toolName, args, result, status }: ToolCallMessagePar
 export const AssistantMessage: FC = () => {
   return (
     <MessagePrimitive.Root className="relative mx-auto w-full max-w-2xl py-4">
-      <div className="leading-7 break-words text-foreground">
+      <div className="leading-7 wrap-break-word text-foreground">
         <MessagePrimitive.Content
           components={{
             Text: ({ text }) => <MarkdownRenderer content={text} />,
