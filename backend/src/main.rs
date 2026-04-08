@@ -62,8 +62,6 @@ async fn main() -> std::io::Result<()> {
         .layer(Extension(Arc::new(openapi)))
         .layer(cors);
 
-    tracing::info!("API docs available at http://{bind_addr}/docs");
-
     tracing::info!("server listening on http://{bind_addr}");
     tracing::info!("API docs: http://{bind_addr}/docs");
 
