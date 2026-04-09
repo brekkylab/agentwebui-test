@@ -286,7 +286,7 @@ dependencies = [
 [[package]]
 name = "ailoy"
 version = "0.3.0"
-source = "git+https://github.com/brekkylab/ailoy.git?rev=31b04b3eef3fd510196fb0e143bf9f7989c6ad68#31b04b3eef3fd510196fb0e143bf9f7989c6ad68"
+source = "git+https://github.com/brekkylab/ailoy.git?rev=1627f529b9ef7e7f6406706bfa34ff60f0a3fdd8#1627f529b9ef7e7f6406706bfa34ff60f0a3fdd8"
 dependencies = [
  "anyhow",
  "async-stream",
@@ -3614,6 +3614,7 @@ dependencies = [
  "schemars_derive 0.8.22",
  "serde",
  "serde_json",
+ "url",
 ]
 
 [[package]]
