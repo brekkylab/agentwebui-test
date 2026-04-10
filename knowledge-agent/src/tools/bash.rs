@@ -14,39 +14,30 @@ const MAX_OUTPUT_CHARS: usize = 8000;
 
 // ── Static regexes (compiled once) ─────────────────────────────────────
 
-static RE_CHAINING: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r";|&&|\|\|").unwrap());
-static RE_SUBSHELL: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"\$\(|`").unwrap());
+static RE_CHAINING: LazyLock<Regex> = LazyLock::new(|| Regex::new(r";|&&|\|\|").unwrap());
+static RE_SUBSHELL: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\$\(|`").unwrap());
 // Block all > and >> redirects. 2>&1 is allowed via separate check.
-static RE_REDIRECT: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r">>?").unwrap());
+static RE_REDIRECT: LazyLock<Regex> = LazyLock::new(|| Regex::new(r">>?").unwrap());
 // Allow only 2>&1 (stderr to stdout merge)
-static RE_REDIRECT_SAFE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"2>&1").unwrap());
+static RE_REDIRECT_SAFE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"2>&1").unwrap());
 static RE_PIPE_SHELL: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"\|\s*(sh|bash|zsh|dash|exec)\b").unwrap());
 static RE_CMD_BOUNDARY: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"(?:^|\|)\s*(\S+)").unwrap());
-static RE_SED_INPLACE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"\bsed\b.*\s-i\b").unwrap());
+static RE_SED_INPLACE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\bsed\b.*\s-i\b").unwrap());
 // Match tar with extract/create: handles both bundled flags (-txf, -xvf)
 // and long options (--extract, --create).
-static RE_TAR_XC: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"\btar\b.*(\s-[a-zA-Z]*[xc][a-zA-Z]*|--(extract|create))").unwrap());
-static RE_UNZIP: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"\bunzip\b").unwrap());
-static RE_UNZIP_LIST: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"\bunzip\b.*\s-l\b").unwrap());
-static RE_TEE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"\btee\b").unwrap());
+static RE_TAR_XC: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"\btar\b.*(\s-[a-zA-Z]*[xc][a-zA-Z]*|--(extract|create))").unwrap()
+});
+static RE_UNZIP: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\bunzip\b").unwrap());
+static RE_UNZIP_LIST: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\bunzip\b.*\s-l\b").unwrap());
+static RE_TEE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\btee\b").unwrap());
 
 const BLOCKED_CMDS: &[&str] = &[
-    "rm", "mv", "cp", "mkdir", "touch", "chmod", "chown", "ln",
-    "kill", "pkill", "dd", "mkfs", "mount", "sudo", "su",
-    "pip", "npm", "apt", "brew", "cargo",
-    "sh", "bash", "zsh", "dash", "exec", "eval", "source",
-    "env",
+    "rm", "mv", "cp", "mkdir", "touch", "chmod", "chown", "ln", "kill", "pkill", "dd", "mkfs",
+    "mount", "sudo", "su", "pip", "npm", "apt", "brew", "cargo", "sh", "bash", "zsh", "dash",
+    "exec", "eval", "source", "env",
 ];
 
 // Block `find -delete` and `find -execdir` which bypass the -exec check
@@ -79,25 +70,64 @@ pub struct BashResult {
 
 const WHITELIST: &[&str] = &[
     // File read
-    "cat", "head", "tail", "wc", "file", "stat", "nl",
+    "cat",
+    "head",
+    "tail",
+    "wc",
+    "file",
+    "stat",
+    "nl",
     // Search
-    "grep", "rg", "find",
+    "grep",
+    "rg",
+    "find",
     // Directory
-    "ls", "tree", "pwd", "du",
+    "ls",
+    "tree",
+    "pwd",
+    "du",
     // Text processing — awk excluded: awk scripts can call system() to execute arbitrary commands
-    "sed", "cut", "sort", "uniq", "tr", "paste", "column", "fmt", "fold", "rev",
+    "sed",
+    "cut",
+    "sort",
+    "uniq",
+    "tr",
+    "paste",
+    "column",
+    "fmt",
+    "fold",
+    "rev",
     // Compare
-    "diff", "comm", "cmp",
+    "diff",
+    "comm",
+    "cmp",
     // Encoding / binary
-    "iconv", "strings",
+    "iconv",
+    "strings",
     // JSON/Data
-    "jq", "yq", "csvtool", "xmllint",
+    "jq",
+    "yq",
+    "csvtool",
+    "xmllint",
     // Hash (file dedup / integrity)
-    "md5sum", "sha256sum",
+    "md5sum",
+    "sha256sum",
     // Utility
-    "echo", "printf", "bc", "expr", "seq", "date", "true", "false", "test", "xargs",
+    "echo",
+    "printf",
+    "bc",
+    "expr",
+    "seq",
+    "date",
+    "true",
+    "false",
+    "test",
+    "xargs",
     // Archive (list-only — extract/create blocked via RE_TAR_XC)
-    "tar", "zcat", "zgrep", "unzip",
+    "tar",
+    "zcat",
+    "zgrep",
+    "unzip",
 ];
 
 // ── Quoted-string stripping ─────────────────────────────────────────────
@@ -217,14 +247,14 @@ fn truncate_output(s: &str) -> String {
     while end > 0 && !s.is_char_boundary(end) {
         end -= 1;
     }
-    format!(
-        "{}\n[truncated at {} chars]",
-        &s[..end],
-        MAX_OUTPUT_CHARS
-    )
+    format!("{}\n[truncated at {} chars]", &s[..end], MAX_OUTPUT_CHARS)
 }
 
-pub async fn run_bash(command: &str, timeout_ms: u64, working_dir: Option<&std::path::Path>) -> BashResult {
+pub async fn run_bash(
+    command: &str,
+    timeout_ms: u64,
+    working_dir: Option<&std::path::Path>,
+) -> BashResult {
     if let Err(reason) = validate_command(command) {
         return BashResult {
             stdout: String::new(),
@@ -243,8 +273,7 @@ pub async fn run_bash(command: &str, timeout_ms: u64, working_dir: Option<&std::
         cmd.current_dir(dir);
     }
 
-    let mut child = match cmd.spawn()
-    {
+    let mut child = match cmd.spawn() {
         Ok(c) => c,
         Err(e) => {
             return BashResult {
@@ -265,13 +294,17 @@ pub async fn run_bash(command: &str, timeout_ms: u64, working_dir: Option<&std::
     let out_task = tokio::spawn(async move {
         use tokio::io::AsyncReadExt;
         let mut buf = Vec::new();
-        tokio::io::BufReader::new(stdout_pipe).read_to_end(&mut buf).await?;
+        tokio::io::BufReader::new(stdout_pipe)
+            .read_to_end(&mut buf)
+            .await?;
         Ok::<_, std::io::Error>(buf)
     });
     let err_task = tokio::spawn(async move {
         use tokio::io::AsyncReadExt;
         let mut buf = Vec::new();
-        tokio::io::BufReader::new(stderr_pipe).read_to_end(&mut buf).await?;
+        tokio::io::BufReader::new(stderr_pipe)
+            .read_to_end(&mut buf)
+            .await?;
         Ok::<_, std::io::Error>(buf)
     });
 

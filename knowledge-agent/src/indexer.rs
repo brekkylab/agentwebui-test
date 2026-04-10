@@ -9,7 +9,9 @@ use anyhow::{Context, Result};
 use chrono::Utc;
 use ignore::WalkBuilder;
 use serde::{Deserialize, Serialize};
-use tantivy::{Index, IndexWriter, ReloadPolicy, TantivyDocument, Term, merge_policy::NoMergePolicy, schema::*};
+use tantivy::{
+    Index, IndexWriter, ReloadPolicy, TantivyDocument, Term, merge_policy::NoMergePolicy, schema::*,
+};
 
 // ---------------------------------------------------------------------------
 // Types (same as indexer.rs)
@@ -517,8 +519,8 @@ pub fn build_index_multi(
 /// Diff result between disk and index.
 #[derive(Debug)]
 pub struct SyncPlan {
-    pub to_add: Vec<(String, PathBuf)>,  // (relative filepath, absolute path)
-    pub to_delete: Vec<String>,           // relative filepaths to remove
+    pub to_add: Vec<(String, PathBuf)>, // (relative filepath, absolute path)
+    pub to_delete: Vec<String>,         // relative filepaths to remove
     pub unchanged: usize,
 }
 
@@ -570,11 +572,7 @@ pub fn plan_sync(index: &Index, corpus_dirs: &[PathBuf]) -> Result<SyncPlan> {
 }
 
 /// Apply a sync plan: delete removed docs, add new docs, commit once.
-pub fn apply_sync(
-    index: &Index,
-    writer: &mut IndexWriter,
-    plan: &SyncPlan,
-) -> Result<SyncReport> {
+pub fn apply_sync(index: &Index, writer: &mut IndexWriter, plan: &SyncPlan) -> Result<SyncReport> {
     let schema = index.schema();
     let filepath_f = schema.get_field("filepath")?;
     let content_f = schema.get_field("content")?;

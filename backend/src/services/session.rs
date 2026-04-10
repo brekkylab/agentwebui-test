@@ -1,15 +1,16 @@
 use std::pin::Pin;
 
 use ailoy::{AgentProvider, LangModelAPISchema, LangModelProvider};
-use actix_web::http::StatusCode;
-use actix_web::{HttpResponse, ResponseError};
+use axum::Json;
+use axum::http::StatusCode;
+use axum::response::{IntoResponse, Response};
 use chat_agent::ChatEvent;
 use futures_util::StreamExt;
 use uuid::Uuid;
 
 use crate::models::{
-    CreateSessionRequest, ErrorResponse, MessageRole, Session,
-    SessionDetailResponse, SessionMessage, SessionToolCall, UpdateSessionRequest,
+    CreateSessionRequest, ErrorResponse, MessageRole, Session, SessionDetailResponse,
+    SessionMessage, SessionToolCall, UpdateSessionRequest,
 };
 use crate::repository::RepositoryError;
 use crate::state::AppState;
@@ -32,27 +33,25 @@ pub enum SessionError {
     Runtime(String),
 }
 
-impl ResponseError for SessionError {
-    fn status_code(&self) -> StatusCode {
-        match self {
+impl IntoResponse for SessionError {
+    fn into_response(self) -> Response {
+        let status = match &self {
             Self::NotFound | Self::AgentNotFound | Self::ProviderProfileNotFound => {
                 StatusCode::NOT_FOUND
             }
             Self::NoDefaultProviderProfile | Self::EmptyContent => StatusCode::BAD_REQUEST,
             Self::Runtime(_) => StatusCode::BAD_GATEWAY,
-            Self::Repository(_) => StatusCode::INTERNAL_SERVER_ERROR,
-        }
-    }
-
-    fn error_response(&self) -> HttpResponse {
-        if let Self::Repository(e) = self {
-            tracing::error!("repository error: {e}");
-            return HttpResponse::build(StatusCode::INTERNAL_SERVER_ERROR)
-                .json(ErrorResponse { error: "internal server error".to_string() });
-        }
-        HttpResponse::build(self.status_code()).json(ErrorResponse {
-            error: self.to_string(),
-        })
+            Self::Repository(e) => {
+                tracing::error!("repository error: {e}");
+                StatusCode::INTERNAL_SERVER_ERROR
+            }
+        };
+        let error_msg = if matches!(self, Self::Repository(_)) {
+            "internal server error".to_string()
+        } else {
+            self.to_string()
+        };
+        (status, Json(ErrorResponse { error: error_msg })).into_response()
     }
 }
 
@@ -178,15 +177,15 @@ pub enum SseEvent {
 /// Save user message, run ChatAgent in streaming mode, and yield SSE events.
 /// The final `Done` event includes the persisted assistant message.
 ///
-/// Uses a channel pattern: a `spawn_local` task holds the MutexGuard and streams
-/// ChatEvents, sending SSE events through an mpsc channel. This avoids the `Send`
-/// bound issue since `run_user_text_streaming` returns a `!Send` stream.
+/// Uses an mpsc channel: a spawned task (inside a LocalSet) holds the MutexGuard
+/// and streams ChatEvents, sending SSE events through the channel.
+/// This avoids the `Send` bound issue since `run_user_text_streaming` returns a `!Send` stream.
 pub async fn send_message_streaming(
     state: &AppState,
     session_id: Uuid,
     content: String,
 ) -> Result<
-    Pin<Box<dyn futures_util::Stream<Item = Result<SseEvent, SessionError>>>>,
+    Pin<Box<dyn futures_util::Stream<Item = Result<SseEvent, SessionError>> + Send>>,
     SessionError,
 > {
     if content.trim().is_empty() {
@@ -215,131 +214,137 @@ pub async fn send_message_streaming(
 
     let repository = state.repository.clone();
 
-    // Use actix_web::rt::spawn (spawn_local) since the ChatAgent stream is !Send.
-    // Actix-web handlers already run on a LocalSet, so spawn_local is valid here.
     let (tx, rx) = tokio::sync::mpsc::channel::<Result<SseEvent, SessionError>>(32);
 
-    actix_web::rt::spawn(async move {
-        let mut rt = runtime.lock().await;
-        let mut event_stream = rt.run_user_text_streaming(content);
+    // `run_user_text_streaming` returns a `!Send` stream, so we use spawn_blocking
+    // to run it inside a new tokio runtime on a dedicated thread.
+    tokio::task::spawn_blocking(move || {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("failed to build local runtime");
+        let local_set = tokio::task::LocalSet::new();
+        local_set.block_on(&rt, async move {
+            let mut rt = runtime.lock().await;
+            let mut event_stream = rt.run_user_text_streaming(content);
 
-        let mut assistant_content: Option<String> = None;
-        let mut tool_calls_for_db: Vec<(
-            String,
-            Option<serde_json::Value>,
-            Option<serde_json::Value>,
-        )> = Vec::new();
+            let mut assistant_content: Option<String> = None;
+            let mut tool_calls_for_db: Vec<(
+                String,
+                Option<serde_json::Value>,
+                Option<serde_json::Value>,
+            )> = Vec::new();
 
-        while let Some(event_result) = event_stream.next().await {
-            let sse = match event_result {
-                Ok(ChatEvent::Thinking) => SseEvent::Thinking {
-                    level: "info".to_string(),
-                },
-                Ok(ChatEvent::ToolCall { tool, args }) => {
-                    tool_calls_for_db.push((tool.clone(), Some(args.clone()), None));
-                    SseEvent::ToolCall {
+            while let Some(event_result) = event_stream.next().await {
+                let sse = match event_result {
+                    Ok(ChatEvent::Thinking) => SseEvent::Thinking {
                         level: "info".to_string(),
-                        tool,
-                        args: Some(args),
+                    },
+                    Ok(ChatEvent::ToolCall { tool, args }) => {
+                        tool_calls_for_db.push((tool.clone(), Some(args.clone()), None));
+                        SseEvent::ToolCall {
+                            level: "info".to_string(),
+                            tool,
+                            args: Some(args),
+                        }
                     }
-                }
-                Ok(ChatEvent::ToolResult { tool, result }) => {
-                    // Update the matching tool call's result (last one without a result)
-                    if let Some(tc) = tool_calls_for_db
-                        .iter_mut()
-                        .rev()
-                        .find(|(n, _, r)| n == &tool && r.is_none())
-                    {
-                        tc.2 = Some(result.clone());
+                    Ok(ChatEvent::ToolResult { tool, result }) => {
+                        // Update the matching tool call's result (last one without a result)
+                        if let Some(tc) = tool_calls_for_db
+                            .iter_mut()
+                            .rev()
+                            .find(|(n, _, r)| n == &tool && r.is_none())
+                        {
+                            tc.2 = Some(result.clone());
+                        }
+                        SseEvent::ToolResult {
+                            level: "info".to_string(),
+                            tool,
+                            result: Some(result),
+                            error: None,
+                        }
                     }
-                    SseEvent::ToolResult {
-                        level: "info".to_string(),
-                        tool,
-                        result: Some(result),
-                        error: None,
-                    }
-                }
-                Ok(ChatEvent::Message {
-                    content,
-                    tool_calls: _,
-                }) => {
-                    assistant_content = Some(content.clone());
-                    SseEvent::Message {
-                        level: "info".to_string(),
+                    Ok(ChatEvent::Message {
                         content,
+                        tool_calls: _,
+                    }) => {
+                        assistant_content = Some(content.clone());
+                        SseEvent::Message {
+                            level: "info".to_string(),
+                            content,
+                        }
                     }
-                }
-                Err(e) => {
-                    let _ = tx
-                        .send(Ok(SseEvent::Error {
-                            message: e.to_string(),
-                        }))
-                        .await;
-                    return;
-                }
-            };
-            if tx.send(Ok(sse)).await.is_err() {
-                return; // receiver dropped
-            }
-        }
-
-        // Trim history to 20 turns after streaming completes
-        drop(event_stream);
-        rt.trim_history();
-        drop(rt);
-
-        // Save assistant message + tool calls to DB
-        if let Some(content) = &assistant_content {
-            match repository
-                .add_session_message(session_id, MessageRole::Assistant, content.clone())
-                .await
-            {
-                Ok(Some(msg)) => {
-                    // Save tool calls
-                    if !tool_calls_for_db.is_empty() {
-                        let now = chrono::Utc::now();
-                        let tool_call_models: Vec<SessionToolCall> = tool_calls_for_db
-                            .iter()
-                            .map(|(name, args, result)| SessionToolCall {
-                                id: uuid::Uuid::new_v4().to_string(),
-                                message_id: msg.id.clone(),
-                                tool_name: name.clone(),
-                                tool_args: args.clone(),
-                                tool_result: result.clone(),
-                                duration_ms: None,
-                                created_at: now,
-                            })
-                            .collect();
-                        let _ = repository.save_tool_calls(&msg.id, &tool_call_models).await;
+                    Err(e) => {
+                        let _ = tx
+                            .send(Ok(SseEvent::Error {
+                                message: e.to_string(),
+                            }))
+                            .await;
+                        return;
                     }
-                    let _ = tx
-                        .send(Ok(SseEvent::Done {
-                            assistant_message: msg,
-                        }))
-                        .await;
-                }
-                Ok(None) => {
-                    let _ = tx
-                        .send(Ok(SseEvent::Error {
-                            message: "session not found".to_string(),
-                        }))
-                        .await;
-                }
-                Err(e) => {
-                    let _ = tx
-                        .send(Ok(SseEvent::Error {
-                            message: format!("failed to save message: {e}"),
-                        }))
-                        .await;
+                };
+                if tx.send(Ok(sse)).await.is_err() {
+                    return; // receiver dropped
                 }
             }
-        } else {
-            let _ = tx
-                .send(Ok(SseEvent::Error {
-                    message: "no assistant response".to_string(),
-                }))
-                .await;
-        }
+
+            // Trim history to 20 turns after streaming completes
+            drop(event_stream);
+            rt.trim_history();
+            drop(rt);
+
+            // Save assistant message + tool calls to DB
+            if let Some(content) = &assistant_content {
+                match repository
+                    .add_session_message(session_id, MessageRole::Assistant, content.clone())
+                    .await
+                {
+                    Ok(Some(msg)) => {
+                        // Save tool calls
+                        if !tool_calls_for_db.is_empty() {
+                            let tool_call_models: Vec<SessionToolCall> = tool_calls_for_db
+                                .iter()
+                                .map(|(name, args, result)| SessionToolCall {
+                                    id: uuid::Uuid::new_v4().to_string(),
+                                    message_id: msg.id.clone(),
+                                    tool_name: name.clone(),
+                                    tool_args: args.clone(),
+                                    tool_result: result.clone(),
+                                    duration_ms: None,
+                                    created_at: chrono::Utc::now(),
+                                })
+                                .collect();
+                            let _ = repository.save_tool_calls(&msg.id, &tool_call_models).await;
+                        }
+                        let _ = tx
+                            .send(Ok(SseEvent::Done {
+                                assistant_message: msg,
+                            }))
+                            .await;
+                    }
+                    Ok(None) => {
+                        let _ = tx
+                            .send(Ok(SseEvent::Error {
+                                message: "session not found".to_string(),
+                            }))
+                            .await;
+                    }
+                    Err(e) => {
+                        let _ = tx
+                            .send(Ok(SseEvent::Error {
+                                message: format!("failed to save message: {e}"),
+                            }))
+                            .await;
+                    }
+                }
+            } else {
+                let _ = tx
+                    .send(Ok(SseEvent::Error {
+                        message: "no assistant response".to_string(),
+                    }))
+                    .await;
+            }
+        });
     });
 
     let stream = tokio_stream::wrappers::ReceiverStream::new(rx);

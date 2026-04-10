@@ -3,6 +3,7 @@ mod sqlite;
 
 use std::sync::Arc;
 
+use ailoy::{AgentProvider, AgentSpec};
 use async_trait::async_trait;
 use chrono::DateTime;
 use chrono::Utc;
@@ -13,7 +14,6 @@ use crate::models::{
     Agent, MessageRole, ProviderProfile, Session, SessionMessage, SessionToolCall, Source,
     SourceType, Speedwagon, SpeedwagonIndexStatus,
 };
-use ailoy::{AgentProvider, AgentSpec};
 
 pub use postgres::PostgresRepository;
 pub use sqlite::SqliteRepository;
@@ -203,12 +203,12 @@ pub async fn create_repository_from_env() -> RepositoryResult<Arc<dyn Repository
 pub async fn create_repository(database_url: &str) -> RepositoryResult<Arc<dyn Repository>> {
     if database_url.starts_with("sqlite:") {
         let repository = SqliteRepository::new(database_url).await?;
-        return Ok(Arc::new(repository));
+        return Ok(Arc::new(repository) as Arc<dyn Repository>);
     }
 
     if database_url.starts_with("postgres://") || database_url.starts_with("postgresql://") {
         let repository = PostgresRepository::new(database_url).await?;
-        return Ok(Arc::new(repository));
+        return Ok(Arc::new(repository) as Arc<dyn Repository>);
     }
 
     Err(RepositoryError::InvalidDatabaseUrl(
@@ -220,7 +220,7 @@ pub async fn create_repository(database_url: &str) -> RepositoryResult<Arc<dyn R
 mod tests {
     use super::create_repository;
 
-    #[actix_web::test]
+    #[tokio::test]
     #[should_panic(expected = "postgres implementation")]
     async fn postgres_branch_is_explicit_todo() {
         let _ = create_repository("postgres://localhost/agentwebui_test").await;

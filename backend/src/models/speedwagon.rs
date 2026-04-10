@@ -1,11 +1,11 @@
 use chrono::{DateTime, Utc};
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use utoipa::ToSchema;
 use uuid::Uuid;
 
 // --- Enums ---
 
-#[derive(Clone, Debug, Serialize, Deserialize, ToSchema, PartialEq)]
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema, PartialEq)]
 #[serde(rename_all = "snake_case")]
 pub enum SpeedwagonIndexStatus {
     NotIndexed,
@@ -16,7 +16,7 @@ pub enum SpeedwagonIndexStatus {
 
 // --- Domain Models ---
 
-#[derive(Clone, Debug, Serialize, Deserialize, ToSchema)]
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 pub struct Speedwagon {
     pub id: Uuid,
     pub name: String,
@@ -37,7 +37,7 @@ pub struct Speedwagon {
 
 // --- Response DTOs ---
 
-#[derive(Debug, Serialize, ToSchema)]
+#[derive(Debug, Serialize, JsonSchema)]
 pub struct SpeedwagonResponse {
     pub id: Uuid,
     pub name: String,
@@ -80,7 +80,7 @@ impl From<&Speedwagon> for SpeedwagonResponse {
 
 // --- Request DTOs ---
 
-#[derive(Debug, Deserialize, ToSchema)]
+#[derive(Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct CreateSpeedwagonRequest {
     pub name: String,
@@ -93,7 +93,7 @@ pub struct CreateSpeedwagonRequest {
     pub source_ids: Vec<Uuid>,
 }
 
-#[derive(Debug, Deserialize, ToSchema)]
+#[derive(Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct UpdateSpeedwagonRequest {
     pub name: String,

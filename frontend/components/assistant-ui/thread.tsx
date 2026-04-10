@@ -42,7 +42,7 @@ export const Thread: FC<{ composerLeft?: React.ReactNode }> = ({ composerLeft })
 
 export const ThreadWelcome: FC = () => {
   return (
-    <div className="mx-auto my-auto flex w-full max-w-2xl flex-grow flex-col items-center justify-center">
+    <div className="mx-auto my-auto flex w-full max-w-2xl grow flex-col items-center justify-center">
       <div className="flex flex-col items-center gap-3">
         <h2 className="text-xl font-semibold text-muted-foreground">
           agentwebui-test에 질문하세요
@@ -63,7 +63,7 @@ export const Composer: FC<{ composerLeft?: React.ReactNode }> = ({ composerLeft 
       <ComposerPrimitive.Root className="relative flex w-full flex-col rounded-2xl border border-input bg-background px-1 pt-2 shadow-sm transition-colors focus-within:border-ring focus-within:ring-2 focus-within:ring-ring/50">
         <ComposerPrimitive.Input
           placeholder="메시지를 입력하세요..."
-          className="mb-1 max-h-32 min-h-[60px] w-full resize-none bg-transparent px-3.5 pt-1.5 pb-3 text-base outline-none placeholder:text-muted-foreground"
+          className="mb-1 max-h-32 min-h-15 w-full resize-none bg-transparent px-3.5 pt-1.5 pb-3 text-base outline-none placeholder:text-muted-foreground"
           rows={1}
           autoFocus
         />
@@ -108,7 +108,7 @@ function ToolCallFallback({ toolName, args, result, status }: ToolCallMessagePar
 export const AssistantMessage: FC = () => {
   return (
     <MessagePrimitive.Root className="relative mx-auto w-full max-w-2xl py-4">
-      <div className="leading-7 break-words text-foreground">
+      <div className="leading-7 wrap-break-word text-foreground">
         <MessagePrimitive.Content
           components={{
             Text: ({ text }) => <MarkdownRenderer content={text} />,
@@ -141,7 +141,7 @@ export const UserMessage: FC = () => {
   return (
     <MessagePrimitive.Root className="mx-auto w-full max-w-2xl py-4">
       <div className="flex justify-end">
-        <div className="rounded-2xl bg-muted px-4 py-2.5 break-words text-foreground">
+        <div className="rounded-2xl bg-muted px-4 py-2.5 wrap-break-word text-foreground">
           <MessagePrimitive.Content />
         </div>
       </div>

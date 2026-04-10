@@ -15,7 +15,10 @@ pub fn build_index(
     corpus_dirs: &[impl AsRef<Path>],
     verbose: bool,
 ) -> Result<(), anyhow::Error> {
-    let dirs: Vec<std::path::PathBuf> = corpus_dirs.iter().map(|d| d.as_ref().to_path_buf()).collect();
+    let dirs: Vec<std::path::PathBuf> = corpus_dirs
+        .iter()
+        .map(|d| d.as_ref().to_path_buf())
+        .collect();
     let settings = knowledge_agent::IndexSettings {
         schema_version: 1,
         no_merge: false,

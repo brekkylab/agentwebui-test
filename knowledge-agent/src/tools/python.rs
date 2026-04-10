@@ -73,27 +73,59 @@ pub struct PythonResult {
 
 const ALLOWED_MODULES: &[&str] = &[
     // Math
-    "math", "statistics", "decimal", "fractions",
+    "math",
+    "statistics",
+    "decimal",
+    "fractions",
     // Text
-    "re", "string", "textwrap", "difflib",
+    "re",
+    "string",
+    "textwrap",
+    "difflib",
     // Data
-    "json", "csv", "collections", "itertools", "functools",
+    "json",
+    "csv",
+    "collections",
+    "itertools",
+    "functools",
     // Date/Time
-    "datetime", "time",
+    "datetime",
+    "time",
     // Utility
-    "hashlib", "base64", "pprint", "operator",
+    "hashlib",
+    "base64",
+    "pprint",
+    "operator",
     // io: StringIO/BytesIO allowed; file I/O classes are blocked via RE_BLOCKED_BUILTINS
     "io",
 ];
 
 const BLOCKED_MODULES: &[&str] = &[
-    "os", "sys", "subprocess", "shutil", "pathlib",
-    "socket", "http", "requests",
-    "urllib", "ftplib", "smtplib", "imaplib",
-    "ctypes", "importlib", "runpy", "code", "codeop",
-    "signal", "multiprocessing", "threading",
-    "pickle", "shelve", "marshal",
-    "builtins", "__builtin__",
+    "os",
+    "sys",
+    "subprocess",
+    "shutil",
+    "pathlib",
+    "socket",
+    "http",
+    "requests",
+    "urllib",
+    "ftplib",
+    "smtplib",
+    "imaplib",
+    "ctypes",
+    "importlib",
+    "runpy",
+    "code",
+    "codeop",
+    "signal",
+    "multiprocessing",
+    "threading",
+    "pickle",
+    "shelve",
+    "marshal",
+    "builtins",
+    "__builtin__",
 ];
 
 pub fn validate_python_code(code: &str) -> Result<(), String> {
@@ -154,11 +186,7 @@ fn truncate_output(s: &str) -> String {
     while end > 0 && !s.is_char_boundary(end) {
         end -= 1;
     }
-    format!(
-        "{}\n[truncated at {} chars]",
-        &s[..end],
-        MAX_OUTPUT_CHARS
-    )
+    format!("{}\n[truncated at {} chars]", &s[..end], MAX_OUTPUT_CHARS)
 }
 
 /// Execute Python code in a 3-layer sandbox:
@@ -230,13 +258,17 @@ pub async fn run_python(code: &str, timeout_ms: u64) -> PythonResult {
     let out_task = tokio::spawn(async move {
         use tokio::io::AsyncReadExt;
         let mut buf = Vec::new();
-        tokio::io::BufReader::new(stdout_pipe).read_to_end(&mut buf).await?;
+        tokio::io::BufReader::new(stdout_pipe)
+            .read_to_end(&mut buf)
+            .await?;
         Ok::<_, std::io::Error>(buf)
     });
     let err_task = tokio::spawn(async move {
         use tokio::io::AsyncReadExt;
         let mut buf = Vec::new();
-        tokio::io::BufReader::new(stderr_pipe).read_to_end(&mut buf).await?;
+        tokio::io::BufReader::new(stderr_pipe)
+            .read_to_end(&mut buf)
+            .await?;
         Ok::<_, std::io::Error>(buf)
     });
 

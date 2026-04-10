@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::str::FromStr;
 use std::time::Duration;
 
+use ailoy::{AgentProvider, AgentSpec};
 use async_trait::async_trait;
 use chrono::{DateTime, SecondsFormat, Utc};
 use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteRow};
@@ -13,7 +14,6 @@ use crate::models::{
     SourceType, Speedwagon, SpeedwagonIndexStatus,
 };
 use crate::repository::{Repository, RepositoryError, RepositoryResult};
-use ailoy::{AgentProvider, AgentSpec};
 
 pub struct SqliteRepository {
     pool: SqlitePool,
@@ -1612,7 +1612,7 @@ mod tests {
     use crate::repository::Repository;
     use ailoy::{AgentProvider, AgentSpec, LangModelProvider};
 
-    #[actix_web::test]
+    #[tokio::test]
     async fn sqlite_persists_data_between_repository_instances() {
         let temp_dir = tempdir().expect("temp dir should be created");
         let db_path = temp_dir.path().join("app.db");

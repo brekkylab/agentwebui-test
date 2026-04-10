@@ -1,7 +1,7 @@
+use schemars::JsonSchema;
 use serde::Serialize;
-use utoipa::ToSchema;
 
-#[derive(Debug, Serialize, ToSchema)]
+#[derive(Debug, Serialize, JsonSchema)]
 pub struct ErrorResponse {
     pub error: String,
 }

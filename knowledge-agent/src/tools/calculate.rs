@@ -327,7 +327,10 @@ fn eval_func(name: &str, args: &[f64]) -> Result<f64, String> {
                     }
                     Ok(args[0].ln() / args[1].ln())
                 }
-                _ => Err(format!("log() expects 1 or 2 arguments, got {}", args.len())),
+                _ => Err(format!(
+                    "log() expects 1 or 2 arguments, got {}",
+                    args.len()
+                )),
             }
         }
         "log10" => {
@@ -362,13 +365,19 @@ fn eval_func(name: &str, args: &[f64]) -> Result<f64, String> {
         }
         "min" => {
             if args.len() < 2 {
-                return Err(format!("min() requires at least 2 arguments, got {}", args.len()));
+                return Err(format!(
+                    "min() requires at least 2 arguments, got {}",
+                    args.len()
+                ));
             }
             Ok(args.iter().cloned().fold(f64::INFINITY, f64::min))
         }
         "max" => {
             if args.len() < 2 {
-                return Err(format!("max() requires at least 2 arguments, got {}", args.len()));
+                return Err(format!(
+                    "max() requires at least 2 arguments, got {}",
+                    args.len()
+                ));
             }
             Ok(args.iter().cloned().fold(f64::NEG_INFINITY, f64::max))
         }
@@ -412,7 +421,13 @@ fn eval_func(name: &str, args: &[f64]) -> Result<f64, String> {
         }
         "sign" => {
             ensure_args(name, args, 1)?;
-            Ok(if args[0] > 0.0 { 1.0 } else if args[0] < 0.0 { -1.0 } else { 0.0 })
+            Ok(if args[0] > 0.0 {
+                1.0
+            } else if args[0] < 0.0 {
+                -1.0
+            } else {
+                0.0
+            })
         }
         "trunc" => {
             ensure_args(name, args, 1)?;
@@ -511,10 +526,7 @@ pub fn build_calculate_tool() -> ToolRuntime {
                 Err(e) => return json!({ "error": e.to_string() }).into(),
             };
             match calculate(&expression) {
-                Ok(result) => result_to_value(&CalculateResult {
-                    result,
-                    expression,
-                }),
+                Ok(result) => result_to_value(&CalculateResult { result, expression }),
                 Err(e) => result_to_value(&CalculateError {
                     error: e,
                     expression,

@@ -30,10 +30,7 @@ This applies to the ENTIRE conversation, not just the first message.
 If <user_instructions> exists, follow it for EVERY response — never skip or forget.
 </critical_reminder>"#;
 
-pub fn build_system_prompt(
-    user_instruction: Option<&str>,
-    kb_entries: &[KbEntry],
-) -> String {
+pub fn build_system_prompt(user_instruction: Option<&str>, kb_entries: &[KbEntry]) -> String {
     let mut layers: Vec<String> = Vec::new();
 
     // Layer 1: BASE_PROMPT (always)
