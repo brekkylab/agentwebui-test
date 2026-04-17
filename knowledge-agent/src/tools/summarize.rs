@@ -1,8 +1,8 @@
 use std::sync::Arc;
 
 use ailoy::{
-    LangModelInferConfig, Message, Part, ToolDescBuilder, ToolRuntime, Value,
-    agent::{LangModelProvider, ToolFunc},
+    LangModelInferConfig, Message, Part, ToolAsyncFunc, ToolDescBuilder, ToolRuntime, Value,
+    agent::LangModelProvider,
 };
 use futures::future::BoxFuture;
 use futures::{StreamExt, stream};
@@ -231,7 +231,7 @@ pub fn build_summarize_document_tool(
         }))
         .build();
 
-    let f: Arc<ToolFunc> = Arc::new(move |args: Value| -> BoxFuture<'static, Value> {
+    let f: Arc<ToolAsyncFunc> = Arc::new(move |args: Value| -> BoxFuture<'static, Value> {
         let idx = index.clone();
         let cfg = config.clone();
         Box::pin(async move {
@@ -254,5 +254,5 @@ pub fn build_summarize_document_tool(
         })
     });
 
-    ToolRuntime::new(desc, f)
+    ToolRuntime::new_async(desc, f)
 }

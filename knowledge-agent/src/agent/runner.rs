@@ -1,6 +1,7 @@
 use std::sync::LazyLock;
 
 use ailoy::{
+    TurnEvent,
     agent::AgentRuntime,
     message::{Part, Role},
 };
@@ -99,8 +100,8 @@ pub async fn run_with_trace(agent: &mut AgentRuntime, prompt: &str) -> Result<(S
         let mut stream = agent.stream_turn(query);
         let mut had_error = false;
 
-        while let Some(output) = stream.next().await {
-            let output = match output {
+        while let Some(event) = stream.next().await {
+            let event = match event {
                 Ok(o) => o,
                 Err(e) => {
                     let err_str = e.to_string();
@@ -119,10 +120,9 @@ pub async fn run_with_trace(agent: &mut AgentRuntime, prompt: &str) -> Result<(S
                 }
             };
 
-            let msg = &output.message;
-
-            match msg.role {
-                Role::Assistant => {
+            match event {
+                TurnEvent::AssistantMessage(output) => {
+                    let msg = &output.message;
                     if let Some(ref thinking) = msg.thinking {
                         if !thinking.is_empty() {
                             step_num += 1;
@@ -134,6 +134,9 @@ pub async fn run_with_trace(agent: &mut AgentRuntime, prompt: &str) -> Result<(S
                         }
                     }
                     let has_tool_calls = msg.tool_calls.as_ref().map_or(false, |tc| !tc.is_empty());
+                    if has_tool_calls {
+                        pending_tool_calls.clear();
+                    }
                     for part in &msg.contents {
                         if let Some(text) = part.as_text() {
                             if !text.is_empty() {
@@ -153,32 +156,31 @@ pub async fn run_with_trace(agent: &mut AgentRuntime, prompt: &str) -> Result<(S
                             }
                         }
                     }
-                    if let Some(ref tool_calls) = msg.tool_calls {
-                        pending_tool_calls.clear();
-                        for part in tool_calls {
-                            if let Some((_id, name, args)) = part.as_function() {
-                                tool_call_count += 1;
-                                let input = serde_json::to_value(args).unwrap_or_default();
-                                step_num += 1;
-                                let step = Step::ToolCall {
-                                    name: name.to_string(),
-                                    input: input.clone(),
-                                };
-                                tracer::print_step(step_num, &step);
-                                steps.push(step);
-                                pending_tool_calls.push(name.to_string());
-                            }
-                        }
-                        if tool_call_count >= MAX_TOOL_CALLS {
-                            println!(
-                                "    [limit] max tool calls ({}) reached, stopping",
-                                MAX_TOOL_CALLS
-                            );
-                            return Ok((final_answer, steps));
-                        }
+                }
+                TurnEvent::ToolCall {
+                    id: _,
+                    name,
+                    arguments,
+                } => {
+                    tool_call_count += 1;
+                    let input = serde_json::to_value(arguments).unwrap_or_default();
+                    step_num += 1;
+                    let step = Step::ToolCall {
+                        name: name.clone(),
+                        input,
+                    };
+                    tracer::print_step(step_num, &step);
+                    steps.push(step);
+                    pending_tool_calls.push(name);
+                    if tool_call_count >= MAX_TOOL_CALLS {
+                        println!(
+                            "    [limit] max tool calls ({}) reached, stopping",
+                            MAX_TOOL_CALLS
+                        );
+                        return Ok((final_answer, steps));
                     }
                 }
-                Role::Tool => {
+                TurnEvent::ToolResult(msg) => {
                     let mut call_idx = 0;
                     for part in &msg.contents {
                         let output_val = if let Some(val) = part.as_value() {
@@ -202,7 +204,7 @@ pub async fn run_with_trace(agent: &mut AgentRuntime, prompt: &str) -> Result<(S
                         steps.push(step);
                     }
                 }
-                _ => {}
+                TurnEvent::ToolDelta(_) => {}
             }
         }
 
@@ -248,8 +250,8 @@ pub async fn run_with_trace_channel(
         let mut stream = agent.stream_turn(query);
         let mut had_error = false;
 
-        while let Some(output) = stream.next().await {
-            let output = match output {
+        while let Some(event) = stream.next().await {
+            let event = match event {
                 Ok(o) => o,
                 Err(e) => {
                     let err_str = e.to_string();
@@ -269,10 +271,9 @@ pub async fn run_with_trace_channel(
                 }
             };
 
-            let msg = &output.message;
-
-            match msg.role {
-                Role::Assistant => {
+            match event {
+                TurnEvent::AssistantMessage(output) => {
+                    let msg = &output.message;
                     if let Some(ref thinking) = msg.thinking {
                         if !thinking.is_empty() {
                             let step = Step::Thinking {
@@ -283,6 +284,9 @@ pub async fn run_with_trace_channel(
                         }
                     }
                     let has_tool_calls = msg.tool_calls.as_ref().map_or(false, |tc| !tc.is_empty());
+                    if has_tool_calls {
+                        pending_tool_calls.clear();
+                    }
                     for part in &msg.contents {
                         if let Some(text) = part.as_text() {
                             if !text.is_empty() {
@@ -301,33 +305,32 @@ pub async fn run_with_trace_channel(
                             }
                         }
                     }
-                    if let Some(ref tool_calls) = msg.tool_calls {
-                        pending_tool_calls.clear();
-                        for part in tool_calls {
-                            if let Some((_id, name, args)) = part.as_function() {
-                                tool_call_count += 1;
-                                let input = serde_json::to_value(args).unwrap_or_default();
-                                let step = Step::ToolCall {
-                                    name: name.to_string(),
-                                    input: input.clone(),
-                                };
-                                let _ = tx.send(step.clone());
-                                steps.push(step);
-                                pending_tool_calls.push(name.to_string());
-                            }
-                        }
-                        if tool_call_count >= MAX_TOOL_CALLS {
-                            let _ = tx.send(Step::Reasoning {
-                                content: format!(
-                                    "[limit] max tool calls ({}) reached, stopping",
-                                    MAX_TOOL_CALLS
-                                ),
-                            });
-                            return Ok((final_answer, steps));
-                        }
+                }
+                TurnEvent::ToolCall {
+                    id: _,
+                    name,
+                    arguments,
+                } => {
+                    tool_call_count += 1;
+                    let input = serde_json::to_value(arguments).unwrap_or_default();
+                    let step = Step::ToolCall {
+                        name: name.clone(),
+                        input,
+                    };
+                    let _ = tx.send(step.clone());
+                    steps.push(step);
+                    pending_tool_calls.push(name);
+                    if tool_call_count >= MAX_TOOL_CALLS {
+                        let _ = tx.send(Step::Reasoning {
+                            content: format!(
+                                "[limit] max tool calls ({}) reached, stopping",
+                                MAX_TOOL_CALLS
+                            ),
+                        });
+                        return Ok((final_answer, steps));
                     }
                 }
-                Role::Tool => {
+                TurnEvent::ToolResult(msg) => {
                     let mut call_idx = 0;
                     for part in &msg.contents {
                         let output_val = if let Some(val) = part.as_value() {
@@ -350,7 +353,7 @@ pub async fn run_with_trace_channel(
                         steps.push(step);
                     }
                 }
-                _ => {}
+                TurnEvent::ToolDelta(_) => {}
             }
         }
 

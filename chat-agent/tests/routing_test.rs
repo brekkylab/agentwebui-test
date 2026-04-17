@@ -49,7 +49,7 @@ fn ensure_kb_config() {
     });
 }
 
-fn create_agent(model: &str) -> ChatAgent {
+async fn create_agent(model: &str) -> ChatAgent {
     ensure_kb_config();
     let api_key = std::env::var("OPENAI_API_KEY").expect("OPENAI_API_KEY must be set");
 
@@ -65,10 +65,12 @@ fn create_agent(model: &str) -> ChatAgent {
     };
 
     ChatAgent::new(spec, provider, vec![], HashMap::new(), vec![])
+        .await
+        .expect("chat agent should be created")
 }
 
 async fn assert_routes_to(query: &str, expected_kb: &str) {
-    let mut agent = create_agent("gpt-4.1-mini");
+    let mut agent = create_agent("gpt-4.1-mini").await;
     let result = agent.run_user_text(query).await;
     assert!(result.is_ok(), "run_user_text failed: {result:?}");
 

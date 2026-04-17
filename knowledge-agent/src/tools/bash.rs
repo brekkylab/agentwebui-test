@@ -1,7 +1,7 @@
 use std::sync::{Arc, LazyLock};
 use std::time::Duration;
 
-use ailoy::{ToolDescBuilder, ToolRuntime, Value, agent::ToolFunc};
+use ailoy::{ToolAsyncFunc, ToolDescBuilder, ToolRuntime, Value};
 use futures::future::BoxFuture;
 use regex::Regex;
 use serde::Serialize;
@@ -366,7 +366,7 @@ pub fn build_run_bash_tool(working_dir: Option<std::path::PathBuf>) -> ToolRunti
         }))
         .build();
 
-    let f: Arc<ToolFunc> = Arc::new(move |args: Value| -> BoxFuture<'static, Value> {
+    let f: Arc<ToolAsyncFunc> = Arc::new(move |args: Value| -> BoxFuture<'static, Value> {
         let wd = working_dir.clone();
         Box::pin(async move {
             let command = match extract_required_str(&args, "command") {
@@ -382,5 +382,5 @@ pub fn build_run_bash_tool(working_dir: Option<std::path::PathBuf>) -> ToolRunti
         })
     });
 
-    ToolRuntime::new(desc, f)
+    ToolRuntime::new_async(desc, f)
 }

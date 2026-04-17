@@ -1,7 +1,7 @@
 use std::sync::{Arc, LazyLock};
 use std::time::Duration;
 
-use ailoy::{ToolDescBuilder, ToolRuntime, Value, agent::ToolFunc};
+use ailoy::{ToolAsyncFunc, ToolDescBuilder, ToolRuntime, Value};
 use futures::future::BoxFuture;
 use regex::Regex;
 use serde::Serialize;
@@ -330,7 +330,7 @@ pub fn build_run_python_tool() -> ToolRuntime {
         }))
         .build();
 
-    let f: Arc<ToolFunc> = Arc::new(move |args: Value| -> BoxFuture<'static, Value> {
+    let f: Arc<ToolAsyncFunc> = Arc::new(move |args: Value| -> BoxFuture<'static, Value> {
         Box::pin(async move {
             let code = match extract_required_str(&args, "code") {
                 Ok(c) => c,
@@ -345,5 +345,5 @@ pub fn build_run_python_tool() -> ToolRuntime {
         })
     });
 
-    ToolRuntime::new(desc, f)
+    ToolRuntime::new_async(desc, f)
 }
