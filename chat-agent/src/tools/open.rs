@@ -96,13 +96,13 @@ fn result_to_value(result: &OpenResult) -> Value {
     serde_json::from_value::<Value>(json).unwrap_or(Value::Null)
 }
 
-pub fn build_open_file_tool() -> (String, ToolRuntime) {
+pub fn build_open_file_tool() -> Option<(String, ToolRuntime)> {
     let desc = open_file_desc();
     let func = open_file_func();
-    (
+    Some((
         OPEN_FILE_TOOL.to_string(),
         ToolRuntime::new_async(desc, func),
-    )
+    ))
 }
 
 fn open_file_desc() -> ToolDesc {
@@ -309,7 +309,7 @@ mod tests {
             .await
             .unwrap();
 
-        let (name, runtime) = build_open_file_tool();
+        let (name, runtime) = build_open_file_tool().expect("tool");
         assert_eq!(name, OPEN_FILE_TOOL);
 
         let args = args_value(&[
@@ -342,7 +342,7 @@ mod tests {
         let path = scratch.path.join("secret.pdf");
         tokio::fs::write(&path, b"ignored".to_vec()).await.unwrap();
 
-        let (_, runtime) = build_open_file_tool();
+        let (_, runtime) = build_open_file_tool().expect("tool");
         let args = args_value(&[(
             "filepath",
             Value::string(path.to_string_lossy().to_string()),
@@ -359,7 +359,7 @@ mod tests {
 
     #[tokio::test]
     async fn tool_reports_missing_file() {
-        let (_, runtime) = build_open_file_tool();
+        let (_, runtime) = build_open_file_tool().expect("tool");
         let args = args_value(&[(
             "filepath",
             Value::string("/tmp/definitely_missing_xyz_chat_agent_open.md"),
@@ -376,7 +376,7 @@ mod tests {
 
     #[tokio::test]
     async fn tool_reports_missing_filepath_argument() {
-        let (_, runtime) = build_open_file_tool();
+        let (_, runtime) = build_open_file_tool().expect("tool");
         let call = ailoy::message::Part::function(OPEN_FILE_TOOL, Value::object_empty());
         let msg = runtime.run(call).await.expect("tool run");
         let value = msg.contents[0].as_value().expect("value");
