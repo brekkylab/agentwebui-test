@@ -1,10 +1,10 @@
 {
   "data": {
     "corpus_dirs": [
-      "../backend/data/txt",
-      "../backend/data/financebench/md"
+      "../backend/data/corpus/novel",
+      "../backend/data/corpus/finance"
     ],
-    "txt_dir": "../backend/data/txt",
+    "txt_dir": "../backend/data/corpus/novel",
     "qa_file": "../novelqa_downloader/novelqa_merged.json",
     "index_dir": "./tantivy_index"
   },
