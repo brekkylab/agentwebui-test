@@ -1,8 +1,10 @@
 //! Main-agent tool definitions.
 //!
-//! Contains the default tools (`web_search`, `convert_pdf_to_md`) and the `read_source`
-//! tool. These are tools used directly by the parent ChatAgent — **not** by
-//! speedwagon sub-agents (which live in `speedwagon/`).
+//! Contains the default tools (`web_search`, `convert_pdf_to_md`), the
+//! `read_source` tool, and `open_document` (read line ranges from .md/.txt
+//! files — pairs with `convert_pdf_to_md`). These are tools used directly by
+//! the parent ChatAgent — **not** by speedwagon sub-agents (which live in
+//! `speedwagon/`).
 //!
 //! ## Adding a new tool
 //!
@@ -23,6 +25,8 @@ use ailoy::agent::ToolAsyncFunc;
 use ailoy::{ToolDescBuilder, ToolRuntime, ToolSet, Value, agent::BuiltinToolProvider};
 
 pub const READ_SOURCE_TOOL: &str = "read_source";
+
+pub use crate::open::{OPEN_DOCUMENT_TOOL, build_open_document_tool};
 
 // ---------------------------------------------------------------------------
 // Default tool set (web_search, convert_pdf_to_md)
