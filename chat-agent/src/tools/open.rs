@@ -32,7 +32,7 @@ pub struct OpenResult {
 }
 
 /// Slice `content` into a line-numbered window, truncating at `MAX_CONTENT_CHARS`.
-pub fn open_document(
+pub fn open_file(
     filepath: &str,
     content: &str,
     start_line: Option<usize>,
@@ -191,7 +191,7 @@ fn open_document_func() -> Arc<ToolAsyncFunc> {
                 Err(e) => return error_value(&format!("failed to read file: {e}")),
             };
 
-            let result = open_document(&filepath, &content, start_line, end_line);
+            let result = open_file(&filepath, &content, start_line, end_line);
             result_to_value(&result)
         })
     })
@@ -211,7 +211,7 @@ mod tests {
     #[test]
     fn open_document_returns_requested_range() {
         let c = sample_content();
-        let r = open_document("x.md", &c, Some(5), Some(10));
+        let r = open_file("x.md", &c, Some(5), Some(10));
         assert_eq!(r.start_line, 5);
         assert_eq!(r.end_line, 10);
         assert_eq!(r.total_lines, 30);
@@ -225,7 +225,7 @@ mod tests {
     #[test]
     fn open_document_defaults_to_first_window() {
         let c = sample_content();
-        let r = open_document("x.md", &c, None, None);
+        let r = open_file("x.md", &c, None, None);
         assert_eq!(r.start_line, 1);
         assert!(r.end_line <= 30);
         assert!(r.content.starts_with("1: line 1"));
@@ -234,7 +234,7 @@ mod tests {
     #[test]
     fn open_document_clamps_end_to_total_lines() {
         let c = sample_content();
-        let r = open_document("x.md", &c, Some(25), Some(999));
+        let r = open_file("x.md", &c, Some(25), Some(999));
         assert_eq!(r.start_line, 25);
         assert_eq!(r.end_line, 30);
         assert!(r.content.contains("30: line 30"));
@@ -246,7 +246,7 @@ mod tests {
             .map(|i| format!("l{i}"))
             .collect::<Vec<_>>()
             .join("\n");
-        let r = open_document("x.md", &big, Some(1), Some(10_000));
+        let r = open_file("x.md", &big, Some(1), Some(10_000));
         assert!(r.end_line - r.start_line + 1 <= MAX_LINES_PER_OPEN);
     }
 
@@ -254,7 +254,7 @@ mod tests {
     fn open_document_truncates_on_char_limit() {
         let long_line = "a".repeat(MAX_CONTENT_CHARS);
         let c = format!("{long_line}\n{long_line}\n{long_line}");
-        let r = open_document("x.md", &c, Some(1), Some(3));
+        let r = open_file("x.md", &c, Some(1), Some(3));
         assert!(r.truncated);
         assert!(r.content.contains("[truncated at"));
     }

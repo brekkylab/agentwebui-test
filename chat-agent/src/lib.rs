@@ -4,7 +4,6 @@
 //! Session management and backend integration are handled in later phases.
 
 mod chat_agent;
-mod open;
 pub mod speedwagon;
 pub mod tools;
 
