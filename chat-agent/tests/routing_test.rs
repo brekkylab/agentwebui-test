@@ -87,16 +87,13 @@ async fn assert_routes_to(query: &str, expected_kb: &str) {
     assert!(result.is_ok(), "run_user_text failed: {result:?}");
 
     let expected_tool = format!("ask_speedwagon_{expected_kb}");
-    let entry = agent
+    let result = agent
         .tool_call_log()
         .iter()
-        .find(|e| e.tool == expected_tool);
-
-    let entry = entry.expect(&format!(
-        "query={query:?} → {expected_tool:?} was never called"
-    ));
-
-    let result = entry
+        .find(|e| e.tool == expected_tool)
+        .expect(&format!(
+            "query={query:?} → {expected_tool:?} was never called"
+        ))
         .result
         .as_ref()
         .expect("tool result should be present");
