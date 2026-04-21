@@ -120,6 +120,7 @@ fn open_file_desc() -> ToolDesc {
             "Read a range of lines from a local .md or .txt file. Returns line-numbered content. \
              Use this to read the markdown produced by `convert_pdf_to_md` (pass its `md_path` as filepath). \
              Keep ranges small (20-40 lines) to be efficient. \
+             Requests larger than {MAX_LINES_PER_OPEN} lines are capped. \
              Allowed extensions: {}.",
             ALLOWED_EXTENSIONS.join(", ")
         ))
