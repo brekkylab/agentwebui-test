@@ -1733,15 +1733,26 @@ mod tests {
             .collect();
 
         let mut ids = std::collections::HashSet::new();
+        let mut created_count = 0usize;
         for handle in handles {
-            let (agent, _) = handle
+            let (agent, created) = handle
                 .await
                 .expect("task should join")
                 .expect("agent should be returned");
             ids.insert(agent.id);
+            if created {
+                created_count += 1;
+            }
         }
 
         assert_eq!(ids.len(), 1, "all concurrent calls should return the same agent id");
+        // The `created` flag drives the handler's 201-vs-200 decision. Under
+        // concurrency, exactly one caller may observe `created=true` — all
+        // others must see the existing row via ON CONFLICT DO UPDATE.
+        assert_eq!(
+            created_count, 1,
+            "exactly one concurrent call should have inserted the row"
+        );
 
         let agents = repository
             .list_agents()

@@ -148,6 +148,9 @@ pub fn router(state: AppState_) -> ApiRouter {
     ApiRouter::new()
         .api_route("/health", get(health))
         .api_route("/agents", get(list_agents).post(create_agent))
+        // No PUT on agents: specs are the agent's identity. "Changing" an agent
+        // means POST /agents (find-or-create returns either a matching row or a
+        // new one) followed by PUT /sessions/{id} to relink — the CoW flow.
         .api_route(
             "/agents/{id}",
             get(get_agent).delete(delete_agent),
