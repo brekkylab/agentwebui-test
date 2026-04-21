@@ -18,30 +18,37 @@ DATA_PATH="$PROJECT_ROOT/$DATA_DIR"
 echo "=== Setting up $DATA_PATH ==="
 
 # 1. Config
-echo "[1/4] Downloading knowledge_agents.json..."
+echo "[1/5] Downloading knowledge_agents.json..."
 mkdir -p "$DATA_PATH"
 aws s3 cp "$BUCKET/agentwebui/knowledge_agents.json" "$DATA_PATH/knowledge_agents.json"
 
 # 2. Corpus — finance (.md only, skip .pdf)
-echo "[2/4] Downloading finance corpus..."
+echo "[2/5] Downloading finance corpus..."
 mkdir -p "$DATA_PATH/corpus/finance"
 aws s3 sync "$BUCKET/PatronusAI__financebench/" "$DATA_PATH/corpus/finance/" \
   --exclude "*" --include "*.md"
 
-# 3. Corpus — novel (.txt only) + QA file
-echo "[3/4] Downloading novel corpus..."
+# 3. Corpus — cuad (.md only, skip .pdf and README)
+echo "[3/5] Downloading cuad corpus..."
+mkdir -p "$DATA_PATH/corpus/cuad"
+aws s3 sync "$BUCKET/TheAtticusProject__cuad/" "$DATA_PATH/corpus/cuad/" \
+  --exclude "*" --include "*.md" --exclude "README.md"
+
+# 4. Corpus — novel (.txt only) + QA file
+echo "[4/5] Downloading novel corpus..."
 mkdir -p "$DATA_PATH/corpus/novel"
 aws s3 sync "$BUCKET/NovelQA__NovelQA/books/" "$DATA_PATH/corpus/novel/"
 aws s3 cp "$BUCKET/NovelQA__NovelQA/novelqa_merged.json" "$DATA_PATH/corpus/novel/novelqa_merged.json"
 
-# 4. Indexes
-echo "[4/4] Downloading indexes..."
-mkdir -p "$DATA_PATH/index/finance" "$DATA_PATH/index/novel"
+# 5. Indexes
+echo "[5/5] Downloading indexes..."
+mkdir -p "$DATA_PATH/index/finance" "$DATA_PATH/index/cuad" "$DATA_PATH/index/novel"
 aws s3 sync "$BUCKET/agentwebui/index/finance/" "$DATA_PATH/index/finance/"
+aws s3 sync "$BUCKET/agentwebui/index/cuad/" "$DATA_PATH/index/cuad/"
 aws s3 sync "$BUCKET/agentwebui/index/novel/" "$DATA_PATH/index/novel/"
 
 echo ""
 echo "=== Done ==="
 echo "  Config:  $DATA_PATH/knowledge_agents.json"
-echo "  Corpus:  $DATA_PATH/corpus/{finance,novel} (novel includes novelqa_merged.json)"
-echo "  Index:   $DATA_PATH/index/{finance,novel}"
+echo "  Corpus:  $DATA_PATH/corpus/{finance,cuad,novel} (novel includes novelqa_merged.json)"
+echo "  Index:   $DATA_PATH/index/{finance,cuad,novel}"
