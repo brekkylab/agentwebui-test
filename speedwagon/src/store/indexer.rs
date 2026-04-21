@@ -1,7 +1,6 @@
-use std::{fmt, fs, path::Path};
+use std::{fs, path::Path};
 
 use anyhow::Result;
-use serde::{Deserialize, Serialize};
 use tantivy::{
     Index, IndexWriter, TantivyDocument, Term,
     collector::TopDocs,
@@ -9,34 +8,7 @@ use tantivy::{
     schema::{IndexRecordOption, OwnedValue, STORED, STRING, TEXT},
 };
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Document {
-    pub id: String,
-    pub title: String,
-    pub content: Option<String>,
-}
-
-impl fmt::Display for Document {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        const TRIM: usize = 50;
-        let content = match &self.content {
-            None => "<no content>".to_string(),
-            Some(c) => {
-                let raw = if c.len() > TRIM {
-                    format!("{}...", &c[..TRIM])
-                } else {
-                    c.clone()
-                };
-                raw.replace('\n', "\\n")
-            }
-        };
-        write!(
-            f,
-            "{{ id: {}, title: {}, content: {} }}",
-            self.id, self.title, content
-        )
-    }
-}
+use super::Document;
 
 pub fn open_or_create(index_dir: &Path) -> Result<Index> {
     let index = if index_dir.exists() {
@@ -52,11 +24,6 @@ pub fn open_or_create(index_dir: &Path) -> Result<Index> {
 
         Index::create_in_dir(index_dir, schema)?
     };
-
-    // let reader = index
-    //     .reader_builder()
-    //     .reload_policy(ReloadPolicy::OnCommitWithDelay)
-    //     .try_into()?;
 
     Ok(index)
 }
@@ -78,6 +45,7 @@ pub fn add_document(index: &Index, id: &str, title: &str, content: &str) -> Resu
     Ok(Document {
         id: id.to_string(),
         title: title.to_string(),
+        len: content.len(),
         content: Some(content.to_string()),
     })
 }
@@ -112,10 +80,12 @@ pub fn delete_document(index: &Index, id: &str) -> Result<Option<Document>> {
 
         let (_, addr) = top_docs.into_iter().next().unwrap();
         let tdoc: TantivyDocument = searcher.doc(addr)?;
+        let content = get_str(&tdoc, content_f);
         Document {
             id: id.to_string(),
             title: get_str(&tdoc, title_f),
-            content: Some(get_str(&tdoc, content_f)),
+            len: content.len(),
+            content: Some(content),
         }
     };
 
@@ -144,14 +114,12 @@ pub fn list_documents(index: &Index, include_content: bool) -> Result<Vec<Docume
         .into_iter()
         .map(|(_, addr)| {
             let doc: TantivyDocument = searcher.doc(addr).unwrap();
+            let content = get_str(&doc, content_f);
             Document {
                 id: get_str(&doc, id_f),
                 title: get_str(&doc, title_f),
-                content: if include_content {
-                    Some(get_str(&doc, content_f))
-                } else {
-                    None
-                },
+                len: content.len(),
+                content: if include_content { Some(content) } else { None },
             }
         })
         .collect())
@@ -176,10 +144,12 @@ pub fn get_document(index: &Index, id: &str) -> Result<Option<Document>> {
 
     Ok(top_docs.into_iter().next().map(|(_, addr)| {
         let doc: TantivyDocument = searcher.doc(addr).unwrap();
+        let content = get_str(&doc, content_f);
         Document {
             id: id.to_string(),
             title: get_str(&doc, title_f),
-            content: Some(get_str(&doc, content_f)),
+            len: content.len(),
+            content: Some(content),
         }
     }))
 }

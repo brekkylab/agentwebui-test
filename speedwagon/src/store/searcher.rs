@@ -4,7 +4,7 @@ use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use tantivy::{Index, TantivyDocument, collector::TopDocs, schema::OwnedValue};
 
-use crate::store::indexer::Document;
+use crate::store::Document;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SearchResult {
@@ -81,6 +81,7 @@ fn doc_to_result(
         document: Document {
             id: get_str(doc, schema.get_field("id").unwrap()),
             title: get_str(doc, schema.get_field("title").unwrap()),
+            len: content.len(),
             content: Some(content),
         },
         score,

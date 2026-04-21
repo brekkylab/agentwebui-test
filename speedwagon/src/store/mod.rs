@@ -1,3 +1,4 @@
+mod document;
 mod indexer;
 mod parser;
 mod searcher;
@@ -12,9 +13,8 @@ use anyhow::{Context as _, Result};
 use tantivy::Index;
 use uuid::Uuid;
 
-pub use indexer::Document;
-pub use parser::TitleAgent;
-pub use searcher::SearchPage;
+pub use document::{Document, FindResult};
+pub use searcher::{SearchPage, SearchResult};
 
 /// Speedwagon store layout:
 ///
@@ -134,6 +134,36 @@ impl Store {
 
     pub fn search(&self, query: impl AsRef<str>, page: u32, page_size: u32) -> Result<SearchPage> {
         searcher::search_page(&self.index, query.as_ref(), page, page_size)
+    }
+
+    /// Reads a byte slice of a document's content.
+    /// Returns `None` if the document does not exist or has no content.
+    pub fn read(&self, id: Uuid, offset: usize, len: usize) -> Option<String> {
+        let doc = self.get(id)?;
+        let content = doc.content?;
+        Some(document::read_in_document(&content, offset, len))
+    }
+
+    /// Searches within a single document's content for pattern matches.
+    /// Returns `None` if the document does not exist or has no content.
+    pub fn find(
+        &self,
+        id: Uuid,
+        keyword: impl AsRef<str>,
+        cursor: usize,
+        k: usize,
+        context_bytes: usize,
+    ) -> Option<FindResult> {
+        let doc = self.get(id)?;
+        let content = doc.content?;
+        Some(document::find_in_document(
+            &id.to_string(),
+            &content,
+            keyword.as_ref(),
+            cursor,
+            k,
+            context_bytes,
+        ))
     }
 }
 

@@ -1,7 +1,7 @@
 mod agent;
 mod store;
-// mod tool;
+mod tool;
 
 pub use agent::*;
 pub use store::*;
-// pub use tool::*;
+pub use tool::*;
