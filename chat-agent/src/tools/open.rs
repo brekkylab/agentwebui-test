@@ -154,7 +154,9 @@ fn open_file_desc() -> ToolDesc {
                             ("type", Value::string("integer")),
                             (
                                 "description",
-                                Value::string("End line (default start+100)"),
+                                Value::string(format!(
+                                    "End line (default start+{DEFAULT_WINDOW_LINES})"
+                                )),
                             ),
                         ]),
                     ),
