@@ -105,9 +105,27 @@ impl Store {
         Ok(doc)
     }
 
+    /// Get # of documents
+    pub fn count(&self) -> u32 {
+        indexer::num_documents(&self.index).unwrap_or(0) as u32
+    }
+
     /// Returns all documents stored in the index.
-    pub fn list(&self, include_content: bool) -> Result<Vec<Document>> {
-        indexer::list_documents(&self.index, include_content)
+    pub fn list(&self, include_content: bool, page: u32, page_size: u32) -> Result<Vec<Document>> {
+        let all = indexer::list_documents(&self.index, include_content)?;
+        let start = (page * page_size) as usize;
+        Ok(all
+            .into_iter()
+            .skip(start)
+            .take(page_size as usize)
+            .collect())
+    }
+
+    pub fn get(&self, id: impl Into<Uuid>) -> Option<Document> {
+        let id = id.into();
+        indexer::get_document(&self.index, &id.to_string())
+            .ok()
+            .flatten()
     }
 
     pub fn root(&self) -> &Path {
@@ -166,7 +184,9 @@ mod tests {
             );
         }
 
-        let docs = store.list(true).expect("failed to list documents");
+        let docs = store
+            .list(true, 0, u32::MAX)
+            .expect("failed to list documents");
         for doc in &docs {
             println!("{doc}");
         }

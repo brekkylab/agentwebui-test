@@ -157,6 +157,33 @@ pub fn list_documents(index: &Index, include_content: bool) -> Result<Vec<Docume
         .collect())
 }
 
+pub fn num_documents(index: &Index) -> Result<u64> {
+    let reader = index.reader()?;
+    Ok(reader.searcher().num_docs())
+}
+
+pub fn get_document(index: &Index, id: &str) -> Result<Option<Document>> {
+    let reader = index.reader()?;
+    let searcher = reader.searcher();
+    let schema = index.schema();
+    let id_f = schema.get_field("id")?;
+    let title_f = schema.get_field("title")?;
+    let content_f = schema.get_field("content")?;
+
+    let term = Term::from_field_text(id_f, id);
+    let query = TermQuery::new(term, IndexRecordOption::Basic);
+    let top_docs = searcher.search(&query, &TopDocs::with_limit(1))?;
+
+    Ok(top_docs.into_iter().next().map(|(_, addr)| {
+        let doc: TantivyDocument = searcher.doc(addr).unwrap();
+        Document {
+            id: id.to_string(),
+            title: get_str(&doc, title_f),
+            content: Some(get_str(&doc, content_f)),
+        }
+    }))
+}
+
 fn get_str(doc: &TantivyDocument, field: tantivy::schema::Field) -> String {
     match doc.get_first(field) {
         Some(OwnedValue::Str(s)) => s.clone(),
