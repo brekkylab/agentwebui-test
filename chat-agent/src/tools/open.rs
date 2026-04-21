@@ -4,7 +4,9 @@
 //! the LLM then calls `open_file(filepath=md_path, start_line, end_line)`
 //! to read slices of the converted markdown.
 //!
-//! Extension whitelist (`ALLOWED_EXTENSIONS`) blocks arbitrary file reads.
+//! The extension whitelist alone can't stop symlink/traversal reads, so paths
+//! are canonicalized and must stay under `allowed_root()` (the system temp
+//! dir, where `convert_pdf_to_md` writes its output).
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -91,6 +93,13 @@ fn has_allowed_extension(path: &Path) -> bool {
         .unwrap_or(false)
 }
 
+/// Directory that canonicalized paths must stay under.
+/// `convert_pdf_to_md` writes via Python `tempfile`, which uses the system temp dir.
+fn allowed_root() -> PathBuf {
+    let tmp = std::env::temp_dir();
+    tmp.canonicalize().unwrap_or(tmp)
+}
+
 fn result_to_value(result: &OpenResult) -> Value {
     let json = serde_json::to_value(result).unwrap_or(serde_json::Value::Null);
     serde_json::from_value::<Value>(json).unwrap_or(Value::Null)
@@ -169,8 +178,17 @@ fn open_file_func() -> Arc<ToolAsyncFunc> {
                 None => return error_value("missing filepath"),
             };
 
-            let path = PathBuf::from(&filepath);
-            if !has_allowed_extension(&path) {
+            let canonical = match tokio::fs::canonicalize(&filepath).await {
+                Ok(p) => p,
+                Err(_) => return error_value("file not found or inaccessible"),
+            };
+
+            if !canonical.starts_with(allowed_root()) {
+                return error_value("path outside allowed directory");
+            }
+
+            // narrow to .md/.txt even inside allowed_root().
+            if !has_allowed_extension(&canonical) {
                 return error_value(&format!(
                     "disallowed file extension: only {} are allowed",
                     ALLOWED_EXTENSIONS.join(", ")
@@ -186,7 +204,7 @@ fn open_file_func() -> Arc<ToolAsyncFunc> {
                 .and_then(Value::as_integer)
                 .map(|v| v.max(1) as usize);
 
-            let content = match tokio::fs::read_to_string(&path).await {
+            let content = match tokio::fs::read_to_string(&canonical).await {
                 Ok(c) => c,
                 Err(e) => return error_value(&format!("failed to read file: {e}")),
             };
@@ -371,7 +389,52 @@ mod tests {
             .pointer("/error")
             .and_then(|v| v.as_str())
             .unwrap_or("");
-        assert!(err.contains("failed to read file"), "got: {err}");
+        assert!(err.contains("file not found or inaccessible"), "got: {err}");
+    }
+
+    #[tokio::test]
+    async fn tool_rejects_path_outside_allowed_root() {
+        let (_, runtime) = build_open_file_tool().expect("tool");
+        let args = args_value(&[("filepath", Value::string("/etc/hosts"))]);
+        let call = ailoy::message::Part::function(OPEN_FILE_TOOL, args);
+        let msg = runtime.run(call).await.expect("tool run");
+        let value = msg.contents[0].as_value().expect("value");
+        let err = value
+            .pointer("/error")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        assert!(
+            err.contains("path outside allowed directory")
+                || err.contains("file not found or inaccessible"),
+            "got: {err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn tool_rejects_symlink_pointing_outside_allowed_root() {
+        let scratch = Scratch::new("reject_symlink");
+        let link = scratch.path.join("link.md");
+        #[cfg(unix)]
+        std::os::unix::fs::symlink("/etc/hosts", &link).expect("symlink");
+        #[cfg(not(unix))]
+        return;
+
+        let (_, runtime) = build_open_file_tool().expect("tool");
+        let args = args_value(&[(
+            "filepath",
+            Value::string(link.to_string_lossy().to_string()),
+        )]);
+        let call = ailoy::message::Part::function(OPEN_FILE_TOOL, args);
+        let msg = runtime.run(call).await.expect("tool run");
+        let value = msg.contents[0].as_value().expect("value");
+        let err = value
+            .pointer("/error")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        assert!(
+            err.contains("path outside allowed directory"),
+            "got: {err}"
+        );
     }
 
     #[tokio::test]
