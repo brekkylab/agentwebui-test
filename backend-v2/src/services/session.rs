@@ -8,7 +8,7 @@ use uuid::Uuid;
 use crate::models::{
     CreateSessionRequest, ErrorResponse, Session, SessionDetailResponse, UpdateSessionRequest,
 };
-use crate::repository::RepositoryError;
+// use crate::repository::RepositoryError;
 use crate::state::AppState;
 
 #[derive(Debug, thiserror::Error)]
@@ -46,30 +46,11 @@ impl IntoResponse for SessionError {
     }
 }
 
-pub async fn get_session_detail(
-    state: &AppState,
-    id: Uuid,
-) -> Result<Option<SessionDetailResponse>, SessionError> {
-    let Some(session) = state.repository.get_session(id).await? else {
-        return Ok(None);
-    };
-    let tool_calls = state
-        .repository
-        .get_tool_calls_for_session(id)
-        .await
-        .unwrap_or_default();
-    Ok(Some(SessionDetailResponse::from((session, tool_calls))))
-}
-
 pub async fn create_session(
     state: &AppState,
     req: CreateSessionRequest,
 ) -> Result<Session, SessionError> {
-    let CreateSessionRequest {
-        agent_id,
-        provider_profile_id,
-        title,
-    } = req;
+    let CreateSessionRequest { agent_id } = req;
 
     match state.repository.get_agent(agent_id).await? {
         Some(_) => {}
@@ -80,7 +61,7 @@ pub async fn create_session(
 
     let session = state
         .repository
-        .create_session(agent_id, resolved_id, title)
+        .create_session(agent_id, resolved_id)
         .await?;
 
     Ok(session)
@@ -100,7 +81,7 @@ pub async fn update_session(
 
     let session = state
         .repository
-        .update_session_atomic(id, req.title, req.provider_profile_id)
+        .update_session_atomic(id)
         .await?
         .ok_or(SessionError::NotFound)?;
 
@@ -115,44 +96,44 @@ pub async fn delete_session(state: &AppState, id: Uuid) -> Result<(), SessionErr
     Ok(())
 }
 
-async fn resolve_provider_profile_id(
-    state: &AppState,
-    requested: Option<Uuid>,
-) -> Result<Uuid, SessionError> {
-    if let Some(id) = requested {
-        return match state.repository.get_provider_profile(id).await? {
-            Some(_) => Ok(id),
-            None => Err(SessionError::ProviderProfileNotFound),
-        };
-    }
+// async fn resolve_provider_profile_id(
+//     state: &AppState,
+//     requested: Option<Uuid>,
+// ) -> Result<Uuid, SessionError> {
+//     if let Some(id) = requested {
+//         return match state.repository.get_provider_profile(id).await? {
+//             Some(_) => Ok(id),
+//             None => Err(SessionError::ProviderProfileNotFound),
+//         };
+//     }
 
-    let profiles = state.repository.list_provider_profiles().await?;
+//     let profiles = state.repository.list_provider_profiles().await?;
 
-    profiles
-        .iter()
-        .filter(|p| p.is_default)
-        .min_by(|a, b| {
-            provider_priority(&a.provider)
-                .cmp(&provider_priority(&b.provider))
-                .then_with(|| a.created_at.cmp(&b.created_at))
-                .then_with(|| a.id.cmp(&b.id))
-        })
-        .map(|p| p.id)
-        .ok_or(SessionError::NoDefaultProviderProfile)
-}
+//     profiles
+//         .iter()
+//         .filter(|p| p.is_default)
+//         .min_by(|a, b| {
+//             provider_priority(&a.provider)
+//                 .cmp(&provider_priority(&b.provider))
+//                 .then_with(|| a.created_at.cmp(&b.created_at))
+//                 .then_with(|| a.id.cmp(&b.id))
+//         })
+//         .map(|p| p.id)
+//         .ok_or(SessionError::NoDefaultProviderProfile)
+// }
 
-fn provider_priority(provider: &AgentProvider) -> u8 {
-    let lm = provider
-        .models
-        .get("*")
-        .or_else(|| provider.models.values().next());
-    match lm {
-        Some(LangModelProvider::API { schema, .. }) => match schema {
-            LangModelAPISchema::ChatCompletion => 0,
-            LangModelAPISchema::Anthropic => 1,
-            LangModelAPISchema::Gemini => 2,
-            LangModelAPISchema::OpenAI => 3,
-        },
-        _ => u8::MAX,
-    }
-}
+// fn provider_priority(provider: &AgentProvider) -> u8 {
+//     let lm = provider
+//         .models
+//         .get("*")
+//         .or_else(|| provider.models.values().next());
+//     match lm {
+//         Some(LangModelProvider::API { schema, .. }) => match schema {
+//             LangModelAPISchema::ChatCompletion => 0,
+//             LangModelAPISchema::Anthropic => 1,
+//             LangModelAPISchema::Gemini => 2,
+//             LangModelAPISchema::OpenAI => 3,
+//         },
+//         _ => u8::MAX,
+//     }
+// }

@@ -7,11 +7,6 @@ use uuid::Uuid;
 pub struct Session {
     pub id: Uuid,
     pub agent_id: Uuid,
-    // pub provider_profile_id: Uuid,
-    // pub title: Option<String>,
-    // pub messages: Vec<SessionMessage>,
-    // pub speedwagon_ids: Vec<Uuid>,
-    // pub source_ids: Vec<Uuid>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }

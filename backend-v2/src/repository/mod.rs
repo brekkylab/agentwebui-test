@@ -58,12 +58,7 @@ pub trait Repository: Send + Sync {
         is_default: bool,
     ) -> RepositoryResult<ProviderProfile>;
 
-    async fn create_session(
-        &self,
-        agent_id: Uuid,
-        provider_profile_id: Uuid,
-        title: Option<String>,
-    ) -> RepositoryResult<Session>;
+    async fn create_session(&self, agent_id: Uuid) -> RepositoryResult<Session>;
     async fn list_sessions(
         &self,
         agent_id: Option<Uuid>,
@@ -77,12 +72,7 @@ pub trait Repository: Send + Sync {
         role: MessageRole,
         content: String,
     ) -> RepositoryResult<Option<SessionMessage>>;
-    async fn update_session_atomic(
-        &self,
-        id: Uuid,
-        title: Option<String>,
-        provider_profile_id: Option<Uuid>,
-    ) -> RepositoryResult<Option<Session>>;
+    async fn update_session_atomic(&self, id: Uuid) -> RepositoryResult<Option<Session>>;
 
     // --- Session Tool Calls ---
     async fn save_tool_calls(

@@ -1,8 +1,10 @@
 mod handlers;
 mod models;
 mod prompt;
-mod repository;
-mod services;
+// mod repository;
+// mod services;
+mod error;
+mod session;
 mod state;
 
 use std::sync::Arc;

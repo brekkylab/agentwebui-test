@@ -240,9 +240,6 @@ impl SqliteRepository {
         Ok(Session {
             id,
             agent_id,
-            provider_profile_id,
-            title,
-            messages: vec![],
             created_at,
             updated_at,
         })
@@ -301,7 +298,6 @@ impl SqliteRepository {
         };
 
         let mut session = Self::row_to_session(&row)?;
-        session.messages = self.load_session_messages(session.id).await?;
 
         Ok(Some(session))
     }
@@ -591,9 +587,9 @@ impl Repository for SqliteRepository {
         let mut sessions = Vec::with_capacity(rows.len());
         for row in rows {
             let mut session = Self::row_to_session(&row)?;
-            if include_messages {
-                session.messages = self.load_session_messages(session.id).await?;
-            }
+            // if include_messages {
+            //     session.messages = self.load_session_messages(session.id).await?;
+            // }
             sessions.push(session);
         }
 
@@ -873,7 +869,7 @@ mod tests {
             .expect("provider profile should be created");
 
         let session = repository
-            .create_session(agent.id, profile.id, None)
+            .create_session(agent.id, profile.id)
             .await
             .expect("session should be created");
 
