@@ -1,7 +1,8 @@
 [workspace]
 resolver = "3"
 members = [
-    "./speedwagon",
+    "./agents",
+    "./backend-v2",
 ]
 
 [workspace.dependencies]

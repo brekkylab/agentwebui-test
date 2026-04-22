@@ -1,0 +1,907 @@
+use std::str::FromStr;
+use std::time::Duration;
+
+use ailoy::agent::{AgentProvider, AgentSpec};
+use async_trait::async_trait;
+use chrono::{DateTime, SecondsFormat, Utc};
+use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteRow};
+use sqlx::{Row, SqlitePool};
+use uuid::Uuid;
+
+use crate::models::{
+    Agent, MessageRole, ProviderProfile, Session, SessionMessage, SessionToolCall,
+};
+use crate::repository::{Repository, RepositoryError, RepositoryResult};
+
+pub struct SqliteRepository {
+    pool: SqlitePool,
+}
+
+impl SqliteRepository {
+    pub async fn new(database_url: &str) -> RepositoryResult<Self> {
+        let options = SqliteConnectOptions::from_str(database_url)
+            .map_err(|_| RepositoryError::InvalidDatabaseUrl(database_url.to_string()))?
+            .create_if_missing(true)
+            .foreign_keys(true)
+            .journal_mode(SqliteJournalMode::Wal)
+            .busy_timeout(Duration::from_secs(5));
+
+        let pool = SqlitePoolOptions::new()
+            .max_connections(5)
+            .connect_with(options)
+            .await?;
+
+        let repository = Self { pool };
+        repository.init_schema().await?;
+        Ok(repository)
+    }
+
+    async fn init_schema(&self) -> RepositoryResult<()> {
+        sqlx::query("PRAGMA foreign_keys = ON;")
+            .execute(&self.pool)
+            .await?;
+        sqlx::query("PRAGMA synchronous = NORMAL;")
+            .execute(&self.pool)
+            .await?;
+
+        sqlx::query(
+            r#"
+            CREATE TABLE IF NOT EXISTS agents (
+                id TEXT PRIMARY KEY,
+                spec_json TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+            "#,
+        )
+        .execute(&self.pool)
+        .await?;
+
+        sqlx::query(
+            r#"
+            CREATE TABLE IF NOT EXISTS provider_profiles (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL UNIQUE,
+                provider_json TEXT NOT NULL,
+                is_default INTEGER NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+            "#,
+        )
+        .execute(&self.pool)
+        .await?;
+
+        sqlx::query(
+            r#"
+            CREATE TABLE IF NOT EXISTS sessions (
+                id TEXT PRIMARY KEY,
+                agent_id TEXT NOT NULL,
+                provider_profile_id TEXT NOT NULL,
+                title TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                FOREIGN KEY(agent_id) REFERENCES agents(id) ON DELETE RESTRICT,
+                FOREIGN KEY(provider_profile_id) REFERENCES provider_profiles(id) ON DELETE RESTRICT
+            );
+            "#,
+        )
+        .execute(&self.pool)
+        .await?;
+
+        sqlx::query(
+            r#"
+            CREATE TABLE IF NOT EXISTS session_messages (
+                id TEXT PRIMARY KEY,
+                session_id TEXT NOT NULL,
+                role TEXT NOT NULL,
+                content TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                FOREIGN KEY(session_id) REFERENCES sessions(id) ON DELETE CASCADE
+            );
+            "#,
+        )
+        .execute(&self.pool)
+        .await?;
+
+        sqlx::query("CREATE INDEX IF NOT EXISTS idx_sessions_agent_id ON sessions(agent_id);")
+            .execute(&self.pool)
+            .await?;
+
+        sqlx::query(
+            "CREATE INDEX IF NOT EXISTS idx_sessions_provider_profile_id ON sessions(provider_profile_id);",
+        )
+        .execute(&self.pool)
+        .await?;
+
+        sqlx::query(
+            "CREATE INDEX IF NOT EXISTS idx_session_messages_session_id_created_at ON session_messages(session_id, created_at);",
+        )
+        .execute(&self.pool)
+        .await?;
+
+        // --- Session Tool Calls ---
+        sqlx::query(
+            r#"
+            CREATE TABLE IF NOT EXISTS session_tool_calls (
+                id TEXT PRIMARY KEY,
+                message_id TEXT NOT NULL,
+                tool_name TEXT NOT NULL,
+                tool_args TEXT,
+                tool_result TEXT,
+                duration_ms INTEGER,
+                created_at TEXT NOT NULL,
+                FOREIGN KEY(message_id) REFERENCES session_messages(id) ON DELETE CASCADE
+            );
+            "#,
+        )
+        .execute(&self.pool)
+        .await?;
+
+        sqlx::query(
+            "CREATE INDEX IF NOT EXISTS idx_session_tool_calls_message_id ON session_tool_calls(message_id);",
+        )
+        .execute(&self.pool)
+        .await?;
+
+        Ok(())
+    }
+
+    fn now_string() -> String {
+        Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true)
+    }
+
+    fn parse_uuid(value: String, field: &str) -> RepositoryResult<Uuid> {
+        Uuid::parse_str(&value)
+            .map_err(|_| RepositoryError::InvalidData(format!("invalid uuid in field `{field}`")))
+    }
+
+    fn parse_timestamp(value: String, field: &str) -> RepositoryResult<DateTime<Utc>> {
+        let parsed = DateTime::parse_from_rfc3339(&value).map_err(|_| {
+            RepositoryError::InvalidData(format!("invalid timestamp in field `{field}`"))
+        })?;
+        Ok(parsed.with_timezone(&Utc))
+    }
+
+    fn message_role_to_string(role: &MessageRole) -> &'static str {
+        match role {
+            MessageRole::System => "system",
+            MessageRole::User => "user",
+            MessageRole::Assistant => "assistant",
+            MessageRole::Tool => "tool",
+        }
+    }
+
+    fn message_role_from_string(role: &str) -> RepositoryResult<MessageRole> {
+        match role {
+            "system" => Ok(MessageRole::System),
+            "user" => Ok(MessageRole::User),
+            "assistant" => Ok(MessageRole::Assistant),
+            "tool" => Ok(MessageRole::Tool),
+            _ => Err(RepositoryError::InvalidData(format!(
+                "invalid message role `{role}`"
+            ))),
+        }
+    }
+
+    fn row_to_agent(row: &SqliteRow) -> RepositoryResult<Agent> {
+        let id = Self::parse_uuid(row.get::<String, _>("id"), "agents.id")?;
+        let spec_json = row.get::<String, _>("spec_json");
+        let spec = serde_json::from_str::<AgentSpec>(&spec_json)?;
+        let created_at =
+            Self::parse_timestamp(row.get::<String, _>("created_at"), "agents.created_at")?;
+        let updated_at =
+            Self::parse_timestamp(row.get::<String, _>("updated_at"), "agents.updated_at")?;
+
+        Ok(Agent {
+            id,
+            spec,
+            created_at,
+            updated_at,
+        })
+    }
+
+    fn row_to_provider_profile(row: &SqliteRow) -> RepositoryResult<ProviderProfile> {
+        let id = Self::parse_uuid(row.get::<String, _>("id"), "provider_profiles.id")?;
+        let provider_json = row.get::<String, _>("provider_json");
+        let provider = serde_json::from_str::<AgentProvider>(&provider_json)?;
+        let created_at = Self::parse_timestamp(
+            row.get::<String, _>("created_at"),
+            "provider_profiles.created_at",
+        )?;
+        let updated_at = Self::parse_timestamp(
+            row.get::<String, _>("updated_at"),
+            "provider_profiles.updated_at",
+        )?;
+
+        Ok(ProviderProfile {
+            id,
+            name: row.get::<String, _>("name"),
+            provider,
+            is_default: row.get::<i64, _>("is_default") != 0,
+            created_at,
+            updated_at,
+        })
+    }
+
+    fn row_to_session(row: &SqliteRow) -> RepositoryResult<Session> {
+        let id = Self::parse_uuid(row.get::<String, _>("id"), "sessions.id")?;
+        let agent_id = Self::parse_uuid(row.get::<String, _>("agent_id"), "sessions.agent_id")?;
+        let provider_profile_id = Self::parse_uuid(
+            row.get::<String, _>("provider_profile_id"),
+            "sessions.provider_profile_id",
+        )?;
+        let title = row.get::<Option<String>, _>("title");
+        let created_at =
+            Self::parse_timestamp(row.get::<String, _>("created_at"), "sessions.created_at")?;
+        let updated_at =
+            Self::parse_timestamp(row.get::<String, _>("updated_at"), "sessions.updated_at")?;
+
+        Ok(Session {
+            id,
+            agent_id,
+            provider_profile_id,
+            title,
+            messages: vec![],
+            created_at,
+            updated_at,
+        })
+    }
+
+    async fn load_session_messages(
+        &self,
+        session_id: Uuid,
+    ) -> RepositoryResult<Vec<SessionMessage>> {
+        let rows = sqlx::query(
+            r#"
+            SELECT id, role, content, created_at
+            FROM session_messages
+            WHERE session_id = ?
+            ORDER BY created_at ASC, id ASC;
+            "#,
+        )
+        .bind(session_id.to_string())
+        .fetch_all(&self.pool)
+        .await?;
+
+        let mut messages = Vec::with_capacity(rows.len());
+        for row in rows {
+            let id = row.get::<String, _>("id");
+            let role = Self::message_role_from_string(&row.get::<String, _>("role"))?;
+            let content = row.get::<String, _>("content");
+            let created_at = Self::parse_timestamp(
+                row.get::<String, _>("created_at"),
+                "session_messages.created_at",
+            )?;
+            messages.push(SessionMessage {
+                id,
+                role,
+                content,
+                created_at,
+            });
+        }
+
+        Ok(messages)
+    }
+
+    async fn load_session_by_id(&self, id: Uuid) -> RepositoryResult<Option<Session>> {
+        let row = sqlx::query(
+            r#"
+            SELECT id, agent_id, provider_profile_id, title, created_at, updated_at
+            FROM sessions
+            WHERE id = ?;
+            "#,
+        )
+        .bind(id.to_string())
+        .fetch_optional(&self.pool)
+        .await?;
+
+        let Some(row) = row else {
+            return Ok(None);
+        };
+
+        let mut session = Self::row_to_session(&row)?;
+        session.messages = self.load_session_messages(session.id).await?;
+
+        Ok(Some(session))
+    }
+}
+
+#[async_trait]
+impl Repository for SqliteRepository {
+    async fn create_agent(&self, spec: AgentSpec) -> RepositoryResult<Agent> {
+        let now = Self::now_string();
+        let id = Uuid::new_v4();
+
+        sqlx::query(
+            r#"
+            INSERT INTO agents (id, spec_json, created_at, updated_at)
+            VALUES (?, ?, ?, ?);
+            "#,
+        )
+        .bind(id.to_string())
+        .bind(serde_json::to_string(&spec)?)
+        .bind(&now)
+        .bind(&now)
+        .execute(&self.pool)
+        .await?;
+
+        Ok(Agent {
+            id,
+            spec,
+            created_at: Self::parse_timestamp(now.clone(), "agents.created_at")?,
+            updated_at: Self::parse_timestamp(now, "agents.updated_at")?,
+        })
+    }
+
+    async fn list_agents(&self) -> RepositoryResult<Vec<Agent>> {
+        let rows = sqlx::query(
+            r#"
+            SELECT id, spec_json, created_at, updated_at
+            FROM agents
+            ORDER BY created_at ASC, id ASC;
+            "#,
+        )
+        .fetch_all(&self.pool)
+        .await?;
+
+        rows.iter().map(Self::row_to_agent).collect()
+    }
+
+    async fn get_agent(&self, id: Uuid) -> RepositoryResult<Option<Agent>> {
+        let row = sqlx::query(
+            r#"
+            SELECT id, spec_json, created_at, updated_at
+            FROM agents
+            WHERE id = ?;
+            "#,
+        )
+        .bind(id.to_string())
+        .fetch_optional(&self.pool)
+        .await?;
+
+        row.as_ref().map(Self::row_to_agent).transpose()
+    }
+
+    async fn update_agent(&self, id: Uuid, spec: AgentSpec) -> RepositoryResult<Option<Agent>> {
+        let now = Self::now_string();
+
+        let result = sqlx::query(
+            r#"
+            UPDATE agents
+            SET spec_json = ?, updated_at = ?
+            WHERE id = ?;
+            "#,
+        )
+        .bind(serde_json::to_string(&spec)?)
+        .bind(now)
+        .bind(id.to_string())
+        .execute(&self.pool)
+        .await?;
+
+        if result.rows_affected() == 0 {
+            return Ok(None);
+        }
+
+        self.get_agent(id).await
+    }
+
+    async fn delete_agent(&self, id: Uuid) -> RepositoryResult<bool> {
+        let result = sqlx::query("DELETE FROM agents WHERE id = ?;")
+            .bind(id.to_string())
+            .execute(&self.pool)
+            .await?;
+
+        Ok(result.rows_affected() > 0)
+    }
+
+    async fn has_sessions_for_agent(&self, agent_id: Uuid) -> RepositoryResult<bool> {
+        let row = sqlx::query("SELECT EXISTS(SELECT 1 FROM sessions WHERE agent_id = ?) AS c;")
+            .bind(agent_id.to_string())
+            .fetch_one(&self.pool)
+            .await?;
+        Ok(row.get::<i64, _>("c") != 0)
+    }
+
+    async fn create_provider_profile(
+        &self,
+        name: String,
+        provider: AgentProvider,
+        is_default: bool,
+    ) -> RepositoryResult<ProviderProfile> {
+        let now = Self::now_string();
+        let id = Uuid::new_v4();
+
+        sqlx::query(
+            r#"
+            INSERT INTO provider_profiles
+                (id, name, provider_json, is_default, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?);
+            "#,
+        )
+        .bind(id.to_string())
+        .bind(name.clone())
+        .bind(serde_json::to_string(&provider)?)
+        .bind(if is_default { 1_i64 } else { 0_i64 })
+        .bind(&now)
+        .bind(&now)
+        .execute(&self.pool)
+        .await?;
+
+        Ok(ProviderProfile {
+            id,
+            name,
+            provider,
+            is_default,
+            created_at: Self::parse_timestamp(now.clone(), "provider_profiles.created_at")?,
+            updated_at: Self::parse_timestamp(now, "provider_profiles.updated_at")?,
+        })
+    }
+
+    async fn list_provider_profiles(&self) -> RepositoryResult<Vec<ProviderProfile>> {
+        let rows = sqlx::query(
+            r#"
+            SELECT id, name, provider_json, is_default, created_at, updated_at
+            FROM provider_profiles
+            ORDER BY created_at ASC, id ASC;
+            "#,
+        )
+        .fetch_all(&self.pool)
+        .await?;
+
+        rows.iter().map(Self::row_to_provider_profile).collect()
+    }
+
+    async fn get_provider_profile(&self, id: Uuid) -> RepositoryResult<Option<ProviderProfile>> {
+        let row = sqlx::query(
+            r#"
+            SELECT id, name, provider_json, is_default, created_at, updated_at
+            FROM provider_profiles
+            WHERE id = ?;
+            "#,
+        )
+        .bind(id.to_string())
+        .fetch_optional(&self.pool)
+        .await?;
+
+        row.as_ref().map(Self::row_to_provider_profile).transpose()
+    }
+
+    async fn upsert_provider_profile_by_name(
+        &self,
+        name: &str,
+        provider: AgentProvider,
+        is_default: bool,
+    ) -> RepositoryResult<ProviderProfile> {
+        let existing = sqlx::query(
+            r#"
+            SELECT id
+            FROM provider_profiles
+            WHERE name = ?;
+            "#,
+        )
+        .bind(name)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        let now = Self::now_string();
+        let provider_json = serde_json::to_string(&provider)?;
+
+        if let Some(row) = existing {
+            let id = Self::parse_uuid(row.get::<String, _>("id"), "provider_profiles.id")?;
+            sqlx::query(
+                r#"
+                UPDATE provider_profiles
+                SET provider_json = ?, is_default = ?, updated_at = ?
+                WHERE id = ?;
+                "#,
+            )
+            .bind(provider_json)
+            .bind(if is_default { 1_i64 } else { 0_i64 })
+            .bind(now)
+            .bind(id.to_string())
+            .execute(&self.pool)
+            .await?;
+
+            return self.get_provider_profile(id).await?.ok_or_else(|| {
+                RepositoryError::InvalidData("upsert updated row not found".to_string())
+            });
+        }
+
+        let id = Uuid::new_v4();
+        sqlx::query(
+            r#"
+            INSERT INTO provider_profiles
+                (id, name, provider_json, is_default, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?);
+            "#,
+        )
+        .bind(id.to_string())
+        .bind(name)
+        .bind(provider_json)
+        .bind(if is_default { 1_i64 } else { 0_i64 })
+        .bind(&now)
+        .bind(&now)
+        .execute(&self.pool)
+        .await?;
+
+        self.get_provider_profile(id).await?.ok_or_else(|| {
+            RepositoryError::InvalidData("upsert inserted row not found".to_string())
+        })
+    }
+
+    async fn create_session(
+        &self,
+        agent_id: Uuid,
+        provider_profile_id: Uuid,
+        title: Option<String>,
+    ) -> RepositoryResult<Session> {
+        let now = Self::now_string();
+        let id = Uuid::new_v4();
+
+        sqlx::query(
+            r#"
+            INSERT INTO sessions (id, agent_id, provider_profile_id, title, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?);
+            "#,
+        )
+        .bind(id.to_string())
+        .bind(agent_id.to_string())
+        .bind(provider_profile_id.to_string())
+        .bind(title)
+        .bind(&now)
+        .bind(&now)
+        .execute(&self.pool)
+        .await?;
+
+        self.load_session_by_id(id)
+            .await?
+            .ok_or_else(|| RepositoryError::InvalidData("created session not found".to_string()))
+    }
+
+    async fn list_sessions(
+        &self,
+        agent_id: Option<Uuid>,
+        include_messages: bool,
+    ) -> RepositoryResult<Vec<Session>> {
+        let rows = if let Some(agent_id) = agent_id {
+            sqlx::query(
+                r#"
+                SELECT id, agent_id, provider_profile_id, title, created_at, updated_at
+                FROM sessions
+                WHERE agent_id = ?
+                ORDER BY created_at ASC, id ASC;
+                "#,
+            )
+            .bind(agent_id.to_string())
+            .fetch_all(&self.pool)
+            .await?
+        } else {
+            sqlx::query(
+                r#"
+                SELECT id, agent_id, provider_profile_id, title, created_at, updated_at
+                FROM sessions
+                ORDER BY created_at ASC, id ASC;
+                "#,
+            )
+            .fetch_all(&self.pool)
+            .await?
+        };
+
+        let mut sessions = Vec::with_capacity(rows.len());
+        for row in rows {
+            let mut session = Self::row_to_session(&row)?;
+            if include_messages {
+                session.messages = self.load_session_messages(session.id).await?;
+            }
+            sessions.push(session);
+        }
+
+        Ok(sessions)
+    }
+
+    async fn get_session(&self, id: Uuid) -> RepositoryResult<Option<Session>> {
+        self.load_session_by_id(id).await
+    }
+
+    async fn delete_session(&self, id: Uuid) -> RepositoryResult<bool> {
+        let result = sqlx::query("DELETE FROM sessions WHERE id = ?;")
+            .bind(id.to_string())
+            .execute(&self.pool)
+            .await?;
+
+        Ok(result.rows_affected() > 0)
+    }
+
+    async fn add_session_message(
+        &self,
+        session_id: Uuid,
+        role: MessageRole,
+        content: String,
+    ) -> RepositoryResult<Option<SessionMessage>> {
+        let mut tx = self.pool.begin().await?;
+
+        let session_row = sqlx::query("SELECT title FROM sessions WHERE id = ?;")
+            .bind(session_id.to_string())
+            .fetch_optional(tx.as_mut())
+            .await?;
+
+        let Some(session_row) = session_row else {
+            tx.rollback().await?;
+            return Ok(None);
+        };
+
+        let now = Self::now_string();
+        let msg_id = Uuid::new_v4().to_string();
+        sqlx::query(
+            r#"
+            INSERT INTO session_messages (id, session_id, role, content, created_at)
+            VALUES (?, ?, ?, ?, ?);
+            "#,
+        )
+        .bind(&msg_id)
+        .bind(session_id.to_string())
+        .bind(Self::message_role_to_string(&role))
+        .bind(&content)
+        .bind(&now)
+        .execute(tx.as_mut())
+        .await?;
+
+        // Auto-set title from first user message if title is None
+        let current_title = session_row.get::<Option<String>, _>("title");
+        if matches!(role, MessageRole::User) && current_title.is_none() {
+            let auto_title: String = content.chars().take(30).collect();
+            sqlx::query("UPDATE sessions SET title = ?, updated_at = ? WHERE id = ?;")
+                .bind(&auto_title)
+                .bind(&now)
+                .bind(session_id.to_string())
+                .execute(tx.as_mut())
+                .await?;
+        } else {
+            sqlx::query("UPDATE sessions SET updated_at = ? WHERE id = ?;")
+                .bind(&now)
+                .bind(session_id.to_string())
+                .execute(tx.as_mut())
+                .await?;
+        }
+
+        tx.commit().await?;
+
+        let created_at = Self::parse_timestamp(now, "created_at")?;
+        Ok(Some(SessionMessage {
+            id: msg_id,
+            role,
+            content,
+            created_at,
+        }))
+    }
+
+    async fn update_session_atomic(
+        &self,
+        id: Uuid,
+        title: Option<String>,
+        provider_profile_id: Option<Uuid>,
+    ) -> RepositoryResult<Option<Session>> {
+        let id_str = id.to_string();
+
+        let mut tx = self.pool.begin().await?;
+
+        let exists: bool = sqlx::query_scalar("SELECT COUNT(*) > 0 FROM sessions WHERE id = ?")
+            .bind(&id_str)
+            .fetch_one(tx.as_mut())
+            .await?;
+
+        if !exists {
+            tx.rollback().await?;
+            return Ok(None);
+        }
+
+        let now = Self::now_string();
+
+        if let Some(title) = title {
+            sqlx::query("UPDATE sessions SET title = ?, updated_at = ? WHERE id = ?")
+                .bind(&title)
+                .bind(&now)
+                .bind(&id_str)
+                .execute(tx.as_mut())
+                .await?;
+        }
+
+        if let Some(provider_profile_id) = provider_profile_id {
+            sqlx::query("UPDATE sessions SET provider_profile_id = ?, updated_at = ? WHERE id = ?")
+                .bind(provider_profile_id.to_string())
+                .bind(&now)
+                .bind(&id_str)
+                .execute(tx.as_mut())
+                .await?;
+        }
+
+        tx.commit().await?;
+
+        self.get_session(id).await
+    }
+
+    // --- Session Tool Calls ---
+
+    async fn save_tool_calls(
+        &self,
+        message_id: &str,
+        tool_calls: &[SessionToolCall],
+    ) -> RepositoryResult<()> {
+        for tc in tool_calls {
+            let tool_args_json = tc
+                .tool_args
+                .as_ref()
+                .map(|v| serde_json::to_string(v))
+                .transpose()?;
+            let tool_result_json = tc
+                .tool_result
+                .as_ref()
+                .map(|v| serde_json::to_string(v))
+                .transpose()?;
+            sqlx::query(
+                r#"
+                INSERT INTO session_tool_calls
+                    (id, message_id, tool_name, tool_args, tool_result, duration_ms, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?);
+                "#,
+            )
+            .bind(&tc.id)
+            .bind(message_id)
+            .bind(&tc.tool_name)
+            .bind(tool_args_json)
+            .bind(tool_result_json)
+            .bind(tc.duration_ms)
+            .bind(tc.created_at.to_rfc3339_opts(SecondsFormat::Millis, true))
+            .execute(&self.pool)
+            .await?;
+        }
+        Ok(())
+    }
+
+    async fn get_tool_calls_for_message(
+        &self,
+        message_id: &str,
+    ) -> RepositoryResult<Vec<SessionToolCall>> {
+        let rows = sqlx::query(
+            r#"
+            SELECT id, message_id, tool_name, tool_args, tool_result, duration_ms, created_at
+            FROM session_tool_calls
+            WHERE message_id = ?
+            ORDER BY created_at ASC, id ASC;
+            "#,
+        )
+        .bind(message_id)
+        .fetch_all(&self.pool)
+        .await?;
+
+        self.parse_tool_call_rows(rows)
+    }
+
+    async fn get_tool_calls_for_session(
+        &self,
+        session_id: Uuid,
+    ) -> RepositoryResult<Vec<SessionToolCall>> {
+        let rows = sqlx::query(
+            r#"
+            SELECT tc.id, tc.message_id, tc.tool_name, tc.tool_args, tc.tool_result,
+                   tc.duration_ms, tc.created_at
+            FROM session_tool_calls tc
+            WHERE tc.message_id IN (
+                SELECT id FROM session_messages WHERE session_id = ?
+            )
+            ORDER BY tc.created_at ASC, tc.id ASC;
+            "#,
+        )
+        .bind(session_id.to_string())
+        .fetch_all(&self.pool)
+        .await?;
+
+        self.parse_tool_call_rows(rows)
+    }
+}
+
+impl SqliteRepository {
+    fn parse_tool_call_rows(&self, rows: Vec<SqliteRow>) -> RepositoryResult<Vec<SessionToolCall>> {
+        let mut result = Vec::with_capacity(rows.len());
+        for row in rows {
+            let tool_args = row
+                .get::<Option<String>, _>("tool_args")
+                .map(|s| serde_json::from_str::<serde_json::Value>(&s))
+                .transpose()?;
+            let tool_result = row
+                .get::<Option<String>, _>("tool_result")
+                .map(|s| serde_json::from_str::<serde_json::Value>(&s))
+                .transpose()?;
+            let created_at = Self::parse_timestamp(
+                row.get::<String, _>("created_at"),
+                "session_tool_calls.created_at",
+            )?;
+            result.push(SessionToolCall {
+                id: row.get::<String, _>("id"),
+                message_id: row.get::<String, _>("message_id"),
+                tool_name: row.get::<String, _>("tool_name"),
+                tool_args,
+                tool_result,
+                duration_ms: row.get::<Option<i64>, _>("duration_ms"),
+                created_at,
+            });
+        }
+        Ok(result)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use tempfile::tempdir;
+
+    use super::SqliteRepository;
+    use crate::models::MessageRole;
+    use crate::repository::Repository;
+    use ailoy::agent::{AgentProvider, AgentSpec};
+    use ailoy::lang_model::{LangModelAPISchema, LangModelProvider};
+
+    #[tokio::test]
+    async fn sqlite_persists_data_between_repository_instances() {
+        let temp_dir = tempdir().expect("temp dir should be created");
+        let db_path = temp_dir.path().join("app.db");
+        let db_url = format!("sqlite://{}", db_path.display());
+
+        let repository = SqliteRepository::new(&db_url)
+            .await
+            .expect("sqlite repository should be created");
+
+        let agent = repository
+            .create_agent(AgentSpec::new("gpt-4.1"))
+            .await
+            .expect("agent should be created");
+
+        let lm = LangModelProvider::API {
+            schema: LangModelAPISchema::OpenAI,
+            url: url::Url::parse("https://api.openai.com/v1/responses").unwrap(),
+            api_key: Some("test-key".to_string()),
+            max_tokens: None,
+        };
+        let provider = AgentProvider {
+            models: std::collections::BTreeMap::from([("*".to_string(), lm)]),
+            tools: vec![],
+        };
+
+        let profile = repository
+            .create_provider_profile("test-profile".to_string(), provider, true)
+            .await
+            .expect("provider profile should be created");
+
+        let session = repository
+            .create_session(agent.id, profile.id, None)
+            .await
+            .expect("session should be created");
+
+        let session2 = SqliteRepository::new(&db_url)
+            .await
+            .expect("second instance should be created")
+            .get_session(session.id)
+            .await
+            .expect("session should be fetched")
+            .expect("session should exist");
+
+        assert_eq!(session.id, session2.id);
+        assert_eq!(session.agent_id, session2.agent_id);
+
+        repository
+            .add_session_message(session.id, MessageRole::User, "hello world".to_string())
+            .await
+            .expect("message should be added");
+
+        let updated_session = SqliteRepository::new(&db_url)
+            .await
+            .expect("third instance should be created")
+            .get_session(session.id)
+            .await
+            .expect("session should be fetched")
+            .expect("session should exist");
+
+        assert_eq!(updated_session.messages.len(), 1);
+        assert_eq!(updated_session.title, Some("hello world".to_string()));
+    }
+}

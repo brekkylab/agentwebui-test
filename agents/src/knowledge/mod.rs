@@ -16,7 +16,7 @@ use uuid::Uuid;
 pub use document::{Document, FindResult};
 pub use searcher::{SearchPage, SearchResult};
 
-/// Speedwagon store layout:
+/// Knowledge layout:
 ///
 /// ```text
 /// {root}/
@@ -24,7 +24,8 @@ pub use searcher::{SearchPage, SearchResult};
 /// ├── corpus/  ← converted markdown files ({uuid}.md)
 /// └── index/   ← live Tantivy index
 /// ```
-pub struct Store {
+#[derive(Debug, Clone)]
+pub struct Knowledge {
     root: PathBuf,
     index: Index,
 }
@@ -35,7 +36,7 @@ pub enum FileType {
     PDF,
 }
 
-impl Store {
+impl Knowledge {
     /// Opens an existing store or creates a new one at `root`.
     pub fn new(root: impl Into<PathBuf>) -> Result<Self> {
         let root = root.into();
@@ -184,7 +185,7 @@ mod tests {
         .expect("failed to create cache");
 
         let store_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(".tests/finance-bench");
-        let mut store = Store::new(&store_dir).expect("failed to create store");
+        let mut knowledge = Knowledge::new(&store_dir).expect("failed to create store");
 
         let mut ids = Vec::new();
         for i in 0..3 {
@@ -194,7 +195,7 @@ mod tests {
                 .await
                 .unwrap_or_else(|| panic!("failed to fetch {name}"))
                 .into();
-            let id = store
+            let id = knowledge
                 .ingest(bytes, FileType::PDF)
                 .await
                 .unwrap_or_else(|e| panic!("failed to ingest {name}: {e}"));
@@ -214,7 +215,7 @@ mod tests {
             );
         }
 
-        let docs = store
+        let docs = knowledge
             .list(true, 0, u32::MAX)
             .expect("failed to list documents");
         for doc in &docs {

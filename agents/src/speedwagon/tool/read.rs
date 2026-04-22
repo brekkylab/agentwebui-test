@@ -1,5 +1,3 @@
-use std::sync::Arc;
-
 use ailoy::{
     datatype::Value,
     message::{ToolDesc, ToolDescBuilder},
@@ -8,9 +6,9 @@ use ailoy::{
 };
 use uuid::Uuid;
 
-use crate::store::Store;
+use crate::knowledge::Knowledge;
 
-pub fn build_read_document_tool(store: Arc<Store>) -> (ToolDesc, ToolFunc) {
+pub fn build_read_document_tool(knowledge: Knowledge) -> (ToolDesc, ToolFunc) {
     let desc = ToolDescBuilder::new("read_document")
         .description(concat!(
             "Read a byte range of a document's content. ",
@@ -42,7 +40,7 @@ pub fn build_read_document_tool(store: Arc<Store>) -> (ToolDesc, ToolFunc) {
         .build();
 
     let func = ToolFunc::new(move |args: Value| {
-        let store = store.clone();
+        let knowledge = knowledge.clone();
         async move {
             let id_str = match args.pointer("/id").and_then(|v: &Value| v.as_str()) {
                 Some(s) => s.to_string(),
@@ -61,7 +59,7 @@ pub fn build_read_document_tool(store: Arc<Store>) -> (ToolDesc, ToolFunc) {
                 None => return to_value!({"error": "missing required parameter: len"}),
             };
 
-            match store.read(id, offset, len) {
+            match knowledge.read(id, offset, len) {
                 Some(content) => Value::from(content),
                 None => to_value!({"error": format!("document not found: {id_str}")}),
             }

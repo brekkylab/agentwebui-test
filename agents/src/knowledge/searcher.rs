@@ -4,7 +4,7 @@ use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use tantivy::{Index, TantivyDocument, collector::TopDocs, schema::OwnedValue};
 
-use crate::store::Document;
+use crate::knowledge::Document;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SearchResult {

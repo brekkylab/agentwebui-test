@@ -1,10 +1,10 @@
 [package]
-name = "speedwagon"
+name = "agents"
 version = "0.1.0"
 edition = "2024"
 
 [lib]
-name = "speedwagon"
+name = "agents"
 path = "src/lib.rs"
 
 [dependencies]

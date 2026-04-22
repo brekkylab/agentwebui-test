@@ -1,5 +1,3 @@
-use std::sync::Arc;
-
 use ailoy::{
     datatype::Value,
     message::{ToolDesc, ToolDescBuilder},
@@ -8,7 +6,7 @@ use ailoy::{
 };
 use uuid::Uuid;
 
-use crate::store::{FindResult, Store};
+use crate::knowledge::{FindResult, Knowledge};
 
 fn result_to_value(result: &FindResult) -> Value {
     let matches: Vec<Value> = result
@@ -33,7 +31,7 @@ fn result_to_value(result: &FindResult) -> Value {
     })
 }
 
-pub fn build_find_in_document_tool(store: Arc<Store>) -> (ToolDesc, ToolFunc) {
+pub fn build_find_in_document_tool(knowledge: Knowledge) -> (ToolDesc, ToolFunc) {
     let desc = ToolDescBuilder::new("find_in_document")
         .description(concat!(
             "Find all occurrences of a regex pattern within a document. ",
@@ -107,7 +105,7 @@ pub fn build_find_in_document_tool(store: Arc<Store>) -> (ToolDesc, ToolFunc) {
         .build();
 
     let func = ToolFunc::new(move |args: Value| {
-        let store = store.clone();
+        let knowledge = knowledge.clone();
         async move {
             let id_str = match args.pointer("/id").and_then(|v: &Value| v.as_str()) {
                 Some(s) => s.to_string(),
@@ -137,7 +135,7 @@ pub fn build_find_in_document_tool(store: Arc<Store>) -> (ToolDesc, ToolFunc) {
                 .unwrap_or(256)
                 .max(0) as usize;
 
-            match store.find(id, &pattern, cursor, k, context_bytes) {
+            match knowledge.find(id, &pattern, cursor, k, context_bytes) {
                 Some(result) => result_to_value(&result),
                 None => to_value!({"error": format!("document not found: {id_str}")}),
             }

@@ -1,5 +1,3 @@
-use std::sync::Arc;
-
 use ailoy::{
     datatype::Value,
     message::{ToolDesc, ToolDescBuilder},
@@ -7,7 +5,7 @@ use ailoy::{
     tool::ToolFunc,
 };
 
-use crate::store::{SearchPage, Store};
+use crate::knowledge::{Knowledge, SearchPage};
 
 fn result_to_value(page: &SearchPage) -> Value {
     let results: Vec<Value> = page
@@ -26,7 +24,7 @@ fn result_to_value(page: &SearchPage) -> Value {
     Value::Array(results)
 }
 
-pub fn make_search_document_tool(store: Arc<Store>) -> (ToolDesc, ToolFunc) {
+pub fn make_search_document_tool(knowlege: Knowledge) -> (ToolDesc, ToolFunc) {
     let desc = ToolDescBuilder::new("search_document")
         .description(concat!(
             "Search for relevant documents for a given query. ",
@@ -83,7 +81,7 @@ pub fn make_search_document_tool(store: Arc<Store>) -> (ToolDesc, ToolFunc) {
         .build();
 
     let func = ToolFunc::new(move |args: Value| {
-        let store = store.clone();
+        let knowlege = knowlege.clone();
         async move {
             let query = match args.pointer("/query").and_then(|v: &Value| v.as_str()) {
                 Some(q) => q.to_string(),
@@ -102,7 +100,7 @@ pub fn make_search_document_tool(store: Arc<Store>) -> (ToolDesc, ToolFunc) {
                 .unwrap_or(10)
                 .max(1) as u32;
 
-            match store.search(&query, page, page_size) {
+            match knowlege.search(&query, page, page_size) {
                 Ok(output) => result_to_value(&output),
                 Err(e) => to_value!({"error": e.to_string()}),
             }
