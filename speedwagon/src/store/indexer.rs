@@ -4,7 +4,7 @@ use anyhow::Result;
 use tantivy::{
     Index, IndexWriter, TantivyDocument, Term,
     collector::TopDocs,
-    query::{AllQuery, TermQuery},
+    query::{AllQuery, BooleanQuery, Occur, Query, TermQuery},
     schema::{IndexRecordOption, OwnedValue, STORED, STRING, TEXT},
 };
 
@@ -48,6 +48,37 @@ pub fn add_document(index: &Index, id: &str, title: &str, content: &str) -> Resu
         len: content.len(),
         content: Some(content.to_string()),
     })
+}
+
+pub fn add_documents(index: &Index, docs: &[(&str, &str, &str)]) -> Result<Vec<Document>> {
+    if docs.is_empty() {
+        return Ok(vec![]);
+    }
+
+    let schema = index.schema();
+    let id_f = schema.get_field("id")?;
+    let title_f = schema.get_field("title")?;
+    let content_f = schema.get_field("content")?;
+
+    let mut writer: IndexWriter = index.writer(128_000_000)?;
+    let mut result = Vec::with_capacity(docs.len());
+
+    for &(id, title, content) in docs {
+        let mut doc = TantivyDocument::default();
+        doc.add_text(id_f, id);
+        doc.add_text(title_f, title);
+        doc.add_text(content_f, content);
+        writer.add_document(doc)?;
+        result.push(Document {
+            id: id.to_string(),
+            title: title.to_string(),
+            len: content.len(),
+            content: Some(content.to_string()),
+        });
+    }
+
+    writer.commit()?;
+    Ok(result)
 }
 
 pub fn document_exists(index: &Index, id: &str) -> Result<bool> {
@@ -152,6 +183,46 @@ pub fn get_document(index: &Index, id: &str) -> Result<Option<Document>> {
             content: Some(content),
         }
     }))
+}
+
+pub fn get_documents(index: &Index, ids: &[&str]) -> Result<Vec<Document>> {
+    if ids.is_empty() {
+        return Ok(vec![]);
+    }
+
+    let reader = index.reader()?;
+    let searcher = reader.searcher();
+    let schema = index.schema();
+    let id_f = schema.get_field("id")?;
+    let title_f = schema.get_field("title")?;
+    let content_f = schema.get_field("content")?;
+
+    let subqueries: Vec<(Occur, Box<dyn Query>)> = ids
+        .iter()
+        .map(|id| {
+            let term = Term::from_field_text(id_f, id);
+            let q: Box<dyn Query> = Box::new(TermQuery::new(term, IndexRecordOption::Basic));
+            (Occur::Should, q)
+        })
+        .collect();
+
+    let query = BooleanQuery::new(subqueries);
+    let top_docs = searcher.search(&query, &TopDocs::with_limit(ids.len()))?;
+
+    Ok(top_docs
+        .into_iter()
+        .map(|(_, addr)| {
+            let doc: TantivyDocument = searcher.doc(addr).unwrap();
+            let id = get_str(&doc, id_f);
+            let content = get_str(&doc, content_f);
+            Document {
+                id,
+                title: get_str(&doc, title_f),
+                len: content.len(),
+                content: Some(content),
+            }
+        })
+        .collect())
 }
 
 fn get_str(doc: &TantivyDocument, field: tantivy::schema::Field) -> String {

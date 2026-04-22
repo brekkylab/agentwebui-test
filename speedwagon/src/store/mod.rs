@@ -78,6 +78,60 @@ impl Store {
         Ok(id)
     }
 
+    /// Adds multiple files in one batch: translates each to corpus, resolves titles, then
+    /// commits them all to the index in a single write.
+    pub async fn ingest_many(
+        &mut self,
+        items: impl IntoIterator<Item = (impl IntoIterator<Item = u8>, FileType)>,
+    ) -> Result<Vec<Uuid>> {
+        let items = items
+            .into_iter()
+            .map(|v| (v.0.into_iter().collect::<Vec<_>>(), v.1))
+            .collect::<Vec<_>>();
+        let mut all_ids = Vec::with_capacity(items.len());
+        let mut to_index: Vec<(Uuid, String)> = Vec::new(); // (id, content)
+
+        for (bytes, filetype) in &items {
+            let ext = filetype.to_string();
+            let id = Uuid::new_v5(&Uuid::NAMESPACE_OID, bytes);
+            all_ids.push(id);
+
+            let origin_path = self.root.join("origin").join(format!("{id}.{ext}"));
+            if !origin_path.exists() {
+                fs::write(&origin_path, bytes)?;
+            }
+
+            let corpus_path = self.root.join("corpus").join(format!("{id}.md"));
+            if !corpus_path.exists() {
+                translator::translate(&origin_path, &corpus_path)?;
+            }
+
+            if !indexer::document_exists(&self.index, &id.to_string())? {
+                let content = fs::read_to_string(&corpus_path)
+                    .with_context(|| format!("failed to read corpus: {corpus_path:?}"))?;
+                to_index.push((id, content));
+            }
+        }
+
+        if to_index.is_empty() {
+            return Ok(all_ids);
+        }
+
+        let mut docs: Vec<(String, String, String)> = Vec::with_capacity(to_index.len());
+        for (id, content) in to_index {
+            let title = parser::get_title(&content).await?;
+            docs.push((id.to_string(), title, content));
+        }
+
+        let refs: Vec<(&str, &str, &str)> = docs
+            .iter()
+            .map(|(id, title, content)| (id.as_str(), title.as_str(), content.as_str()))
+            .collect();
+        indexer::add_documents(&self.index, &refs)?;
+
+        Ok(all_ids)
+    }
+
     /// Removes a document from the index and deletes its origin and corpus files.
     /// Returns the deleted document, or `None` if no document with that ID exists.
     pub fn purge(&mut self, id: Uuid) -> Result<Option<Document>> {
@@ -126,6 +180,12 @@ impl Store {
         indexer::get_document(&self.index, &id.to_string())
             .ok()
             .flatten()
+    }
+
+    pub fn get_many(&self, ids: &[Uuid]) -> Result<Vec<Document>> {
+        let id_strs: Vec<String> = ids.iter().map(|id| id.to_string()).collect();
+        let id_refs: Vec<&str> = id_strs.iter().map(String::as_str).collect();
+        indexer::get_documents(&self.index, &id_refs)
     }
 
     pub fn root(&self) -> &Path {
