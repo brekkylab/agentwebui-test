@@ -3,6 +3,10 @@ name = "speedwagon"
 version = "0.1.0"
 edition = "2024"
 
+[features]
+default = ["internal"]
+internal = ["dep:knowledge-base-examples"]
+
 [lib]
 name = "speedwagon"
 path = "src/lib.rs"
@@ -10,6 +14,7 @@ path = "src/lib.rs"
 [[bin]]
 name = "speedwagon"
 path = "src/main.rs"
+required-features = ["internal"]
 
 [dependencies]
 clap = { version = "4", features = ["derive"] }
@@ -22,6 +27,7 @@ futures = "0.3"
 globset = "0.4"
 ignore = "0.4"
 indexmap = "2"
+knowledge-base-examples = { path = "../../knowledge-base-examples", optional = true }
 log = "0.4"
 rand = "0.8"
 regex = "1"
@@ -35,6 +41,3 @@ tokio = { version = "1", features = ["rt-multi-thread", "macros", "time"] }
 tempfile = "3"
 url = { version = "2", features = ["serde"] }
 uuid = { version = "1", features = ["v5"] }
-
-[dev-dependencies]
-knowledge-base-examples = { git = "https://github.com/brekkylab/knowledge-base-examples.git", rev = "e1280765241e44a025c3045ffaee4ac307805c5c" }

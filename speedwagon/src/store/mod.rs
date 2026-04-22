@@ -1,6 +1,8 @@
 mod document;
 mod indexer;
 mod parser;
+#[cfg(feature = "internal")]
+pub mod preset;
 mod searcher;
 mod translator;
 
@@ -33,6 +35,7 @@ pub struct Store {
 #[strum(serialize_all = "lowercase")]
 pub enum FileType {
     PDF,
+    MD,
 }
 
 impl Store {
@@ -53,18 +56,24 @@ impl Store {
         filetype: FileType,
     ) -> Result<Uuid> {
         let bytes: Vec<u8> = contents.into_iter().map(|b| b.into()).collect();
-        let ext = filetype.to_string();
 
         let id = Uuid::new_v5(&Uuid::NAMESPACE_OID, &bytes);
 
-        let origin_path = self.root.join("origin").join(format!("{id}.{ext}"));
-        if !origin_path.exists() {
-            fs::write(&origin_path, &bytes)?;
-        }
-
         let corpus_path = self.root.join("corpus").join(format!("{id}.md"));
         if !corpus_path.exists() {
-            translator::translate(&origin_path, &corpus_path)?;
+            match filetype {
+                FileType::MD => {
+                    fs::write(&corpus_path, &bytes)?;
+                }
+                _ => {
+                    let ext = filetype.to_string();
+                    let origin_path = self.root.join("origin").join(format!("{id}.{ext}"));
+                    if !origin_path.exists() {
+                        fs::write(&origin_path, &bytes)?;
+                    }
+                    translator::translate(&origin_path, &corpus_path)?;
+                }
+            }
         }
 
         if !indexer::document_exists(&self.index, &id.to_string())? {
@@ -92,18 +101,24 @@ impl Store {
         let mut to_index: Vec<(Uuid, String)> = Vec::new(); // (id, content)
 
         for (bytes, filetype) in &items {
-            let ext = filetype.to_string();
             let id = Uuid::new_v5(&Uuid::NAMESPACE_OID, bytes);
             all_ids.push(id);
 
-            let origin_path = self.root.join("origin").join(format!("{id}.{ext}"));
-            if !origin_path.exists() {
-                fs::write(&origin_path, bytes)?;
-            }
-
             let corpus_path = self.root.join("corpus").join(format!("{id}.md"));
             if !corpus_path.exists() {
-                translator::translate(&origin_path, &corpus_path)?;
+                match filetype {
+                    FileType::MD => {
+                        fs::write(&corpus_path, bytes)?;
+                    }
+                    _ => {
+                        let ext = filetype.to_string();
+                        let origin_path = self.root.join("origin").join(format!("{id}.{ext}"));
+                        if !origin_path.exists() {
+                            fs::write(&origin_path, bytes)?;
+                        }
+                        translator::translate(&origin_path, &corpus_path)?;
+                    }
+                }
             }
 
             if !indexer::document_exists(&self.index, &id.to_string())? {
@@ -228,8 +243,9 @@ impl Store {
 }
 
 #[cfg(test)]
+#[cfg(feature = "internal")]
 mod tests {
-    use knowledge_base_examples::{Cached, FinanceBench, KnowledgeBase as _};
+    use knowledge_base_examples::{Cached, DocSet as _, FinanceBench};
 
     use super::*;
 
@@ -248,9 +264,9 @@ mod tests {
 
         let mut ids = Vec::new();
         for i in 0..3 {
-            let name = kb.name(i).await;
+            let name = kb.filename(i).await.unwrap_or_else(|| format!("doc-{i}"));
             let bytes: Vec<u8> = kb
-                .contents(i)
+                .read_origin(i)
                 .await
                 .unwrap_or_else(|| panic!("failed to fetch {name}"))
                 .into();

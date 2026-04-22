@@ -1,3 +1,14 @@
+//! ```sh
+//! # Interactive REPL
+//! cargo run
+//!
+//! # Initialize a dataset preset then start the REPL
+//! cargo run -- --preset finance-bench
+//!
+//! # With a custom store dir or model
+//! cargo run -- --store-dir ~/.my-store --model anthropic/claude-haiku-4-5-20251001 --preset finance-bench
+//! ```
+
 use std::{
     path::{Path, PathBuf},
     sync::Arc,
@@ -13,6 +24,8 @@ use futures::StreamExt;
 use rustyline::{DefaultEditor, error::ReadlineError};
 use speedwagon::{FileType, SpeedwagonSpec, Store, build_toolset};
 
+use speedwagon::preset::{PresetKind, setup_docset};
+
 #[derive(Parser)]
 #[command(name = "speedwagon", about = "Interactive document Q&A agent")]
 struct Cli {
@@ -23,6 +36,10 @@ struct Cli {
     /// Language model (e.g. openai/gpt-4o-mini, anthropic/claude-haiku-4-5-20251001)
     #[arg(long, default_value = "openai/gpt-4o-mini")]
     model: String,
+
+    /// Initialize the store from a predefined dataset before starting
+    #[arg(long)]
+    preset: Option<PresetKind>,
 }
 
 fn resolve_dir(path: &str) -> PathBuf {
@@ -83,7 +100,18 @@ async fn main() -> Result<()> {
         dotenvy::dotenv()?;
     }
 
-    let store_dir = resolve_dir(&cli.store_dir);
+    let store_dir = {
+        let base = resolve_dir(&cli.store_dir);
+        match &cli.preset {
+            Some(preset) => base.join(preset.to_string()),
+            None => base,
+        }
+    };
+
+    if let Some(ref preset) = cli.preset {
+        let mut store = Store::new(&store_dir)?;
+        setup_docset(&mut store, preset).await?;
+    }
 
     let mut provider = AgentProvider::new();
     if let Ok(key) = std::env::var("OPENAI_API_KEY") {
@@ -100,7 +128,10 @@ async fn main() -> Result<()> {
     let doc_count = Store::new(&store_dir)?.count();
 
     println!();
-    println!("  Speedwagon  |  model: {}  |  docs: {}", cli.model, doc_count);
+    println!(
+        "  Speedwagon  |  model: {}  |  docs: {}",
+        cli.model, doc_count
+    );
     println!("  Commands: /list  /ingest <path>  /purge <id>  /clear  /exit");
     println!("  {}", "─".repeat(60));
 
