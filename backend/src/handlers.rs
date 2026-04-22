@@ -151,10 +151,7 @@ pub fn router(state: AppState_) -> ApiRouter {
         // No PUT on agents: specs are the agent's identity. "Changing" an agent
         // means POST /agents (find-or-create returns either a matching row or a
         // new one) followed by PUT /sessions/{id} to relink — the CoW flow.
-        .api_route(
-            "/agents/{id}",
-            get(get_agent).delete(delete_agent),
-        )
+        .api_route("/agents/{id}", get(get_agent).delete(delete_agent))
         .api_route(
             "/provider-profiles",
             get(list_provider_profiles).post(create_provider_profile),
@@ -1607,15 +1604,27 @@ mod tests {
         assert_ne!(id1, id2, "different lm must create a new agent");
     }
 
-    // ===================== Session agent_id relink Tests =====================
-
+    /// Agent-swap contract covers two invariants at once:
+    ///   (a) DB pointer: `sessions.agent_id` updates to the new agent (response reflects it).
+    ///   (b) Runtime: the per-session runtime cache is invalidated and rebuilt with the new
+    ///       agent's spec, and prior turns are replayed from DB into the fresh runtime.
+    ///
+    /// (b) was previously covered by `update_agent_resets_session_runtime_cache` (deleted when
+    /// agents became immutable under copy-on-write). Under CoW, the same invariant now lives on
+    /// the agent-swap path — swapping `agent_id` is the only way to "change" an agent. Keeping
+    /// (a) and (b) in one test mirrors the "swap == invalidate + restore" contract stated in the
+    /// PR body, and ensures a future refactor that updates the DB row but forgets
+    /// `invalidate_session_runtime(id)` fails loudly instead of silently serving stale specs.
+    ///
+    /// Mirrors the request-count shape used by `update_provider_profile_resets_session_runtime_cache`.
     #[tokio::test]
-    async fn update_session_agent_id_relinks_session() {
+    async fn update_session_agent_id_resets_runtime_and_restores_history() {
+        let (mock_url, request_counts) = start_mock_chat_completion_server().await;
         let temp_dir = TempDir::new().expect("temp dir should be created");
         let app = test_app(&temp_dir).await;
 
+        // Two distinct agent specs → two agent rows under CoW.
         let agent_id1 = create_agent(&app).await;
-        // Create a second agent with a different spec
         let resp2 = post_json(
             &app,
             "/agents",
@@ -1626,8 +1635,16 @@ mod tests {
             Uuid::parse_str(response_json(resp2).await["id"].as_str().expect("agent id")).unwrap();
         assert_ne!(agent_id1, agent_id2);
 
-        let profile_id =
-            create_provider_profile(&app, "openai-default", "chat_completion", true).await;
+        // Single mock provider profile shared across both agents — the swap exercises the
+        // agent-side invalidation path in isolation (provider stays identical).
+        let profile_id = create_provider_profile_with_url(
+            &app,
+            "openai-default",
+            "chat_completion",
+            &mock_url,
+            true,
+        )
+        .await;
 
         let session_body = response_json(
             post_json(
@@ -1641,10 +1658,16 @@ mod tests {
         let session_id = Uuid::parse_str(session_body["id"].as_str().expect("session id")).unwrap();
         assert_eq!(
             session_body["agent_id"].as_str().unwrap(),
-            agent_id1.to_string()
+            agent_id1.to_string(),
+            "session must initially point at agent1"
         );
 
-        // Relink to agent2
+        // turn-1: establish baseline under agent1. Populates DB history that the post-swap
+        // runtime must replay.
+        let (status1, _) = stream_user_message(&app, &session_id.to_string(), "turn-1").await;
+        assert_eq!(status1, StatusCode::OK);
+
+        // (a) DB pointer: relink to agent2
         let update_resp = put_json(
             &app,
             &format!("/sessions/{session_id}"),
@@ -1653,10 +1676,32 @@ mod tests {
         .await;
         assert_eq!(update_resp.status(), StatusCode::OK);
         let updated = response_json(update_resp).await;
-        assert_eq!(updated["agent_id"].as_str().unwrap(), agent_id2.to_string());
-    }
+        assert_eq!(
+            updated["agent_id"].as_str().unwrap(),
+            agent_id2.to_string(),
+            "response must reflect the relink to agent2",
+        );
 
-    // ===================== Cascade Delete Tests =====================
+        // turn-2: drives the cached runtime. If `invalidate_session_runtime` was skipped,
+        // the cached agent1 runtime would serve this turn without replaying DB history,
+        // producing `[3, 3]` instead of `[3, 5]`.
+        let (status2, _) = stream_user_message(&app, &session_id.to_string(), "turn-2").await;
+        assert_eq!(status2, StatusCode::OK);
+
+        // (b) Runtime reset + history restore — observable via LLM call shape:
+        //   turn-1:              system(1) + restored-user(1) + streaming-user(1)            = 3
+        //   turn-2 (post-swap):  system(1) + restored-history(user+assistant=2)
+        //                        + restored-user(1) + streaming-user(1)                       = 5
+        let counts = request_counts
+            .lock()
+            .expect("request counts lock should be available")
+            .clone();
+        assert_eq!(
+            counts,
+            vec![3, 5],
+            "agent-swap must invalidate the session runtime and replay DB history on the next turn",
+        );
+    }
 
     #[tokio::test]
     async fn delete_session_cascade_deletes_orphaned_agent() {
