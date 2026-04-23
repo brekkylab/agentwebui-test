@@ -1522,7 +1522,7 @@ impl Repository for SqliteRepository {
             SELECT id, message_id, tool_name, tool_args, tool_result, duration_ms, created_at
             FROM session_tool_calls
             WHERE message_id = ?
-            ORDER BY created_at ASC, id ASC;
+            ORDER BY created_at ASC;
             "#,
         )
         .bind(message_id)
@@ -1568,7 +1568,7 @@ impl Repository for SqliteRepository {
             WHERE tc.message_id IN (
                 SELECT id FROM session_messages WHERE session_id = ?
             )
-            ORDER BY tc.created_at ASC, tc.id ASC;
+            ORDER BY tc.created_at ASC;
             "#,
         )
         .bind(session_id.to_string())
