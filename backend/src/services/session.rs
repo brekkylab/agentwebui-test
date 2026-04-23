@@ -328,17 +328,22 @@ pub async fn send_message_streaming(
                 {
                     Ok(Some(msg)) => {
                         // Save tool calls
+                        // Stagger created_at by index so same-turn rows sort deterministically
+                        // (DB stores ms precision; without offsets ORDER BY falls back to UUID).
                         if !tool_calls_for_db.is_empty() {
+                            let base_ts = chrono::Utc::now();
                             let tool_call_models: Vec<SessionToolCall> = tool_calls_for_db
                                 .iter()
-                                .map(|(name, args, result)| SessionToolCall {
+                                .enumerate()
+                                .map(|(i, (name, args, result))| SessionToolCall {
                                     id: uuid::Uuid::new_v4().to_string(),
                                     message_id: msg.id.clone(),
                                     tool_name: name.clone(),
                                     tool_args: args.clone(),
                                     tool_result: result.clone(),
                                     duration_ms: None,
-                                    created_at: chrono::Utc::now(),
+                                    created_at: base_ts
+                                        + chrono::Duration::milliseconds(i as i64),
                                 })
                                 .collect();
                             let _ = repository.save_tool_calls(&msg.id, &tool_call_models).await;
