@@ -1,5 +1,5 @@
 rm -f run.spec
-pyinstaller run.py \
+.venv/bin/pyinstaller run.py \
     --onedir \
     --noconfirm \
     --recursive-copy-metadata=docling \
