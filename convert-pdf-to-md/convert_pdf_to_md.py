@@ -1,9 +1,7 @@
 import sys
 from io import BytesIO
-import json
 import logging
 import os
-from pathlib import Path
 
 os.environ["HF_HUB_DISABLE_PROGRESS_BARS"] = "1"
 logging.getLogger("docling").setLevel(logging.CRITICAL)
