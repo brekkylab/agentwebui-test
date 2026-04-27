@@ -13,7 +13,7 @@ uv sync --dev
 To install a CPU-only torch wheel excluding NVIDIA dependencies for environments without a GPU or for reducing PyInstaller binary size, use the following command.
 
 ```bash
-uv sync --extra cpu
+uv sync --dev --extra cpu
 ```
 
 ### Test
