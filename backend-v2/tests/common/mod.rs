@@ -62,11 +62,7 @@ pub async fn try_delete_session(app: &axum::Router, id: uuid::Uuid) -> Result<()
         .uri(format!("/sessions/{id}"))
         .body(Body::empty())
         .unwrap();
-    let resp = app
-        .clone()
-        .oneshot(req)
-        .await
-        .map_err(|e| e.to_string())?;
+    let resp = app.clone().oneshot(req).await.map_err(|e| e.to_string())?;
     let status = resp.status();
     if status != axum::http::StatusCode::NO_CONTENT {
         return Err(format!("DELETE /sessions/{id} returned {status}"));
@@ -82,11 +78,7 @@ pub async fn delete_session(app: &axum::Router, id: uuid::Uuid) {
 }
 
 /// Send a message and assert the response is 200. Returns the parsed body.
-pub async fn send_message(
-    app: &axum::Router,
-    id: uuid::Uuid,
-    content: &str,
-) -> serde_json::Value {
+pub async fn send_message(app: &axum::Router, id: uuid::Uuid, content: &str) -> serde_json::Value {
     let body = serde_json::json!({ "content": content }).to_string();
     let req = Request::builder()
         .method("POST")
@@ -169,6 +161,71 @@ pub fn parse_sse_message_events(body: &[u8]) -> Vec<serde_json::Value> {
             serde_json::from_str(data_line).ok()
         })
         .collect()
+}
+
+/// Fetch message history for a session and assert 200. Returns the parsed body.
+pub async fn get_message_history(app: &axum::Router, id: uuid::Uuid) -> serde_json::Value {
+    let req = Request::builder()
+        .method("GET")
+        .uri(format!("/sessions/{id}/messages"))
+        .body(Body::empty())
+        .unwrap();
+
+    let resp = app.clone().oneshot(req).await.unwrap();
+    let status = resp.status();
+    let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+    assert_eq!(
+        status,
+        axum::http::StatusCode::OK,
+        "GET /sessions/{id}/messages failed: {}",
+        String::from_utf8_lossy(&bytes)
+    );
+    serde_json::from_slice(&bytes).unwrap()
+}
+
+/// Fetch message history and return only the HTTP status code (no assertion).
+pub async fn get_message_history_status(
+    app: &axum::Router,
+    id: uuid::Uuid,
+) -> axum::http::StatusCode {
+    let req = Request::builder()
+        .method("GET")
+        .uri(format!("/sessions/{id}/messages"))
+        .body(Body::empty())
+        .unwrap();
+
+    app.clone().oneshot(req).await.unwrap().status()
+}
+
+/// Clear message history for a session and assert 204.
+pub async fn clear_message_history(app: &axum::Router, id: uuid::Uuid) {
+    let req = Request::builder()
+        .method("DELETE")
+        .uri(format!("/sessions/{id}/messages"))
+        .body(Body::empty())
+        .unwrap();
+
+    let resp = app.clone().oneshot(req).await.unwrap();
+    let status = resp.status();
+    assert_eq!(
+        status,
+        axum::http::StatusCode::NO_CONTENT,
+        "DELETE /sessions/{id}/messages failed with status {status}"
+    );
+}
+
+/// Clear message history and return only the HTTP status code (no assertion).
+pub async fn clear_message_history_status(
+    app: &axum::Router,
+    id: uuid::Uuid,
+) -> axum::http::StatusCode {
+    let req = Request::builder()
+        .method("DELETE")
+        .uri(format!("/sessions/{id}/messages"))
+        .body(Body::empty())
+        .unwrap();
+
+    app.clone().oneshot(req).await.unwrap().status()
 }
 
 // ── Text extraction ───────────────────────────────────────────────────────────

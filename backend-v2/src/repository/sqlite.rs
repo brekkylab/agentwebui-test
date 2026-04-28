@@ -154,6 +154,14 @@ impl SqliteRepository {
         Ok(())
     }
 
+    pub async fn clear_messages(&self, session_id: Uuid) -> RepositoryResult<()> {
+        sqlx::query("DELETE FROM session_messages WHERE session_id = ?;")
+            .bind(session_id.to_string())
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
     pub async fn get_messages(&self, session_id: Uuid) -> RepositoryResult<Vec<Message>> {
         let rows = sqlx::query(
             "SELECT message_json FROM session_messages \

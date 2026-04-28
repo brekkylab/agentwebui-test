@@ -9,11 +9,16 @@
 #[path = "common/mod.rs"]
 mod common;
 
-use agent_k_backend::repository;
+use std::sync::Arc;
+
+use agent_k_backend::{repository, state::AppState};
 use common::{
-    SessionGuard, extract_text, make_app_with_repo, post_session, send_message,
-    send_message_status, try_delete_session,
+    SessionGuard, clear_message_history, clear_message_history_status, extract_text,
+    get_message_history, get_message_history_status, make_app_with_repo, make_app_with_state,
+    make_repo, post_session, send_message, send_message_status, try_delete_session,
 };
+use tokio::sync::Mutex;
+use uuid::Uuid;
 
 // ── tests ─────────────────────────────────────────────────────────────────────
 
@@ -156,6 +161,231 @@ async fn unknown_session_returns_404() {
         "non-existent session must return 404"
     );
 }
+
+// ── GET /sessions/{id}/messages ───────────────────────────────────────────────
+
+/// A freshly created session has an empty message history.
+/// Creates the session directly in the DB to avoid the microsandbox requirement.
+#[tokio::test]
+async fn get_messages_returns_empty_for_new_session() {
+    let state = Arc::new(Mutex::new(AppState::new(make_repo().await)));
+    let app = make_app_with_state(state.clone());
+
+    let id = Uuid::new_v4();
+    state
+        .lock()
+        .await
+        .repository
+        .create_session(id)
+        .await
+        .unwrap();
+
+    let messages = get_message_history(&app, id).await;
+    assert_eq!(
+        messages,
+        serde_json::json!([]),
+        "new session must have empty message history"
+    );
+}
+
+/// GET /sessions/{id}/messages must return 404 for an unknown session.
+#[tokio::test]
+async fn get_messages_returns_404_for_unknown_session() {
+    let app = make_app_with_repo(make_repo().await);
+
+    let status = get_message_history_status(&app, Uuid::new_v4()).await;
+    assert_eq!(
+        status,
+        axum::http::StatusCode::NOT_FOUND,
+        "unknown session must return 404"
+    );
+}
+
+/// GET /sessions/{id}/messages returns all persisted messages in insertion order.
+#[tokio::test]
+async fn get_messages_returns_persisted_messages_in_order() {
+    use ailoy::message::{Message, Part, Role};
+
+    let state = Arc::new(Mutex::new(AppState::new(make_repo().await)));
+    let app = make_app_with_state(state.clone());
+
+    let id = Uuid::new_v4();
+    {
+        let st = state.lock().await;
+        st.repository.create_session(id).await.unwrap();
+        let msgs = vec![
+            Message::new(Role::User).with_contents([Part::text("first")]),
+            Message::new(Role::Assistant).with_contents([Part::text("second")]),
+        ];
+        st.repository.append_messages(id, &msgs).await.unwrap();
+    }
+
+    let body = get_message_history(&app, id).await;
+    let arr = body.as_array().expect("response must be a JSON array");
+    assert_eq!(arr.len(), 2, "must return exactly two messages");
+
+    let role0 = arr[0]["role"].as_str().unwrap_or("");
+    let role1 = arr[1]["role"].as_str().unwrap_or("");
+    assert_eq!(role0, "user");
+    assert_eq!(role1, "assistant");
+}
+
+// ── DELETE /sessions/{id}/messages ───────────────────────────────────────────
+
+/// DELETE /sessions/{id}/messages must return 404 for an unknown session.
+#[tokio::test]
+async fn clear_messages_returns_404_for_unknown_session() {
+    let app = make_app_with_repo(make_repo().await);
+
+    let status = clear_message_history_status(&app, Uuid::new_v4()).await;
+    assert_eq!(
+        status,
+        axum::http::StatusCode::NOT_FOUND,
+        "unknown session must return 404"
+    );
+}
+
+/// After clearing, GET /sessions/{id}/messages returns an empty array and the
+/// DB record is gone.
+#[tokio::test]
+async fn clear_messages_removes_persisted_messages() {
+    use ailoy::message::{Message, Part, Role};
+
+    let state = Arc::new(Mutex::new(AppState::new(make_repo().await)));
+    let app = make_app_with_state(state.clone());
+
+    let id = Uuid::new_v4();
+    {
+        let st = state.lock().await;
+        st.repository.create_session(id).await.unwrap();
+        let msgs = vec![
+            Message::new(Role::User).with_contents([Part::text("hello")]),
+            Message::new(Role::Assistant).with_contents([Part::text("world")]),
+        ];
+        st.repository.append_messages(id, &msgs).await.unwrap();
+    }
+
+    let before = get_message_history(&app, id).await;
+    assert_eq!(
+        before.as_array().unwrap().len(),
+        2,
+        "expected two messages before clear"
+    );
+
+    clear_message_history(&app, id).await;
+
+    let after = get_message_history(&app, id).await;
+    assert_eq!(
+        after,
+        serde_json::json!([]),
+        "message history must be empty after clear"
+    );
+}
+
+/// After clearing, the session itself still exists (only messages are removed).
+#[tokio::test]
+async fn clear_messages_does_not_delete_session() {
+    use ailoy::message::{Message, Part, Role};
+
+    let state = Arc::new(Mutex::new(AppState::new(make_repo().await)));
+    let app = make_app_with_state(state.clone());
+
+    let id = Uuid::new_v4();
+    {
+        let st = state.lock().await;
+        st.repository.create_session(id).await.unwrap();
+        let msgs = vec![Message::new(Role::User).with_contents([Part::text("ping")])];
+        st.repository.append_messages(id, &msgs).await.unwrap();
+    }
+
+    clear_message_history(&app, id).await;
+
+    // Session still exists: GET messages returns 200 (not 404).
+    let status = get_message_history_status(&app, id).await;
+    assert_eq!(
+        status,
+        axum::http::StatusCode::OK,
+        "session must still exist after message clear"
+    );
+}
+
+/// After clearing, new messages can be appended to the same session.
+#[tokio::test]
+async fn can_append_messages_after_clear() {
+    use ailoy::message::{Message, Part, Role};
+
+    let state = Arc::new(Mutex::new(AppState::new(make_repo().await)));
+    let app = make_app_with_state(state.clone());
+
+    let id = Uuid::new_v4();
+    {
+        let st = state.lock().await;
+        st.repository.create_session(id).await.unwrap();
+        let msgs = vec![Message::new(Role::User).with_contents([Part::text("old")])];
+        st.repository.append_messages(id, &msgs).await.unwrap();
+    }
+
+    clear_message_history(&app, id).await;
+
+    {
+        let st = state.lock().await;
+        let msgs = vec![Message::new(Role::User).with_contents([Part::text("new")])];
+        st.repository.append_messages(id, &msgs).await.unwrap();
+    }
+
+    let body = get_message_history(&app, id).await;
+    let arr = body.as_array().unwrap();
+    assert_eq!(arr.len(), 1, "only the new message must remain");
+
+    let text = arr[0]["contents"][0]["text"].as_str().unwrap_or("");
+    assert_eq!(text, "new");
+}
+
+/// After clearing, the in-memory agent history is also wiped so the next turn
+/// starts fresh.
+///
+/// Requires: microsandbox runtime.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "requires microsandbox runtime"]
+async fn clear_messages_also_clears_in_memory_agent_history() {
+    unsafe {
+        std::env::set_var("ANTHROPIC_API_KEY", "dummy-key-for-clear-history-test");
+    }
+
+    let dir = tempfile::tempdir().unwrap();
+    let db_url = format!("sqlite://{}", dir.path().join("test.db").display());
+
+    let repo = repository::create_repository(&db_url).await.unwrap();
+    let app = make_app_with_repo(repo.clone());
+
+    let id = post_session(&app).await;
+    let _guard = SessionGuard {
+        app: app.clone(),
+        id,
+    };
+
+    // Manually insert history into the DB and sync it into the agent via the
+    // lazy-create path.  The send_message_status call that follows will fail
+    // (dummy API key), but it will trigger resolve_agent which loads the DB
+    // history into the agent, so the history is in memory before we clear it.
+    {
+        use ailoy::message::{Message, Part, Role};
+        repo.append_messages(
+            id,
+            &[Message::new(Role::User).with_contents([Part::text("should be cleared")])],
+        )
+        .await
+        .unwrap();
+    }
+
+    clear_message_history(&app, id).await;
+
+    // DB must be empty.
+    let db_count = repo.get_messages(id).await.unwrap().len();
+    assert_eq!(db_count, 0, "DB messages must be empty after clear");
+}
+
+// ── misc ──────────────────────────────────────────────────────────────────────
 
 /// Verify the common helper `try_delete_session` returns `Err` for an unknown
 /// session instead of panicking. No sandbox or API key required.

@@ -45,6 +45,10 @@ pub fn get_router(state: Arc<Mutex<AppState>>) -> ApiRouter {
             "/sessions/{id}/messages/stream",
             axum::routing::post(send_message_stream),
         )
+        .route(
+            "/sessions/{id}/messages",
+            axum::routing::get(get_message_history).delete(clear_message_history),
+        )
         .with_state(state)
 }
 
@@ -189,6 +193,57 @@ async fn resolve_agent(
     }
     st.insert_agent(id, agent);
     Ok(st.get_agent(&id).unwrap())
+}
+
+async fn get_message_history(
+    State(state): State<Arc<Mutex<AppState>>>,
+    Path(id): Path<Uuid>,
+) -> Result<Json<Vec<Message>>, (StatusCode, Json<AppError>)> {
+    let st = state.lock().await;
+    if st
+        .repository
+        .get_session(id)
+        .await
+        .map_err(internal)?
+        .is_none()
+    {
+        return Err((
+            StatusCode::NOT_FOUND,
+            Json(AppError::new("session not found")),
+        ));
+    }
+    let messages = st.repository.get_messages(id).await.map_err(internal)?;
+    Ok(Json(messages))
+}
+
+async fn clear_message_history(
+    State(state): State<Arc<Mutex<AppState>>>,
+    Path(id): Path<Uuid>,
+) -> Result<StatusCode, (StatusCode, Json<AppError>)> {
+    let agent_arc = {
+        let st = state.lock().await;
+        if st
+            .repository
+            .get_session(id)
+            .await
+            .map_err(internal)?
+            .is_none()
+        {
+            return Err((
+                StatusCode::NOT_FOUND,
+                Json(AppError::new("session not found")),
+            ));
+        }
+        st.repository.clear_messages(id).await.map_err(internal)?;
+        st.get_agent(&id)
+    };
+
+    if let Some(arc) = agent_arc {
+        arc.lock().await.state.history.clear();
+    }
+
+    tracing::info!(%id, "message history cleared");
+    Ok(StatusCode::NO_CONTENT)
 }
 
 async fn send_message(
