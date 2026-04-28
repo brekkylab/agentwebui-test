@@ -51,8 +51,8 @@ def run_docling(stream: BytesIO = None) -> str:
 def validate_pdf(data: bytes) -> None:
     if not data:
         sys.exit("error: empty input on stdin")
-    if not data.startswith(b"%PDF-"):
-        sys.exit(f"error: not a PDF (header={data[:8]!r})")
+    if b"%PDF-" not in data[:1024]:
+        sys.exit(f"error: not a PDF (no %PDF- in first 1024 bytes; head={data[:16]!r})")
     if b"%%EOF" not in data[-1024:]:
         sys.exit("error: PDF EOF marker not found")
 
