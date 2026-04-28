@@ -1,3 +1,4 @@
+mod description;
 mod document;
 mod indexer;
 mod parser;
@@ -15,6 +16,7 @@ use anyhow::{Context as _, Result};
 use tantivy::Index;
 use uuid::Uuid;
 
+pub use description::{DescriptionAgent, fallback_description};
 pub use document::{Document, FindResult};
 pub use searcher::{SearchPage, SearchResult};
 
@@ -253,6 +255,33 @@ impl Store {
             k,
             context_bytes,
         ))
+    }
+
+    /// Generate a single KB-level description from every document's
+    /// `(title, purpose)` already in the index.
+    ///
+    /// Reads `OPENAI_API_KEY` from the environment (mirrors
+    /// `parser::get_title` / `parser::get_purpose`). On an empty LLM
+    /// body the call substitutes `description::fallback_description`,
+    /// so routing always has some signal.
+    ///
+    /// The output describes only this KB; comparison with adjacent KBs
+    /// is the routing agent's job, not this function's, so there is no
+    /// peer-KB input.
+    pub async fn describe(
+        &self,
+        kb_name: &str,
+        instruction: Option<&str>,
+    ) -> Result<String> {
+        let docs = indexer::list_documents(&self.index, false)?;
+        if docs.is_empty() {
+            return Ok(String::new());
+        }
+        let pairs: Vec<(String, String)> = docs
+            .iter()
+            .map(|d| (d.title.clone(), d.purpose.clone()))
+            .collect();
+        description::get_description(kb_name, instruction, &pairs).await
     }
 }
 
