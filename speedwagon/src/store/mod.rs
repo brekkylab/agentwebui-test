@@ -36,6 +36,7 @@ pub struct Store {
 pub enum FileType {
     PDF,
     MD,
+    HTML,
 }
 
 impl Store {
