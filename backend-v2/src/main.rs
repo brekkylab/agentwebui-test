@@ -1,13 +1,15 @@
+use std::path::PathBuf;
 use std::sync::Arc;
 
-use agent_k_backend::router;
-use agent_k_backend::state::AppState;
+use agent_k_backend::{repository, router, state::AppState};
 use aide::axum::ApiRouter;
 use aide::openapi::{Info, OpenApi};
 use aide::scalar::Scalar;
 use ailoy::agent::default_provider_mut;
 use axum::Extension;
 use axum::response::IntoResponse;
+use speedwagon::{Store, build_toolset};
+use tokio::sync::RwLock;
 use tower_http::cors::{Any, CorsLayer};
 
 #[tokio::main]
@@ -22,7 +24,14 @@ async fn main() -> std::io::Result<()> {
         )
         .init();
 
-    // Load API keys from environment (or .env) into the global provider.
+    let bind_addr = std::env::var("BIND_ADDR").unwrap_or_else(|_| "127.0.0.1:8080".to_string());
+
+    aide::generate::on_error(|error| {
+        tracing::warn!("aide schema error: {error}");
+    });
+    aide::generate::extract_schemas(true);
+
+    // Register API keys with the global provider (needed by Agent::try_with_tools)
     {
         let mut provider = default_provider_mut().await;
         if let Ok(key) = std::env::var("OPENAI_API_KEY") {
@@ -36,13 +45,6 @@ async fn main() -> std::io::Result<()> {
         }
     }
 
-    let bind_addr = std::env::var("BIND_ADDR").unwrap_or_else(|_| "127.0.0.1:8080".to_string());
-
-    aide::generate::on_error(|error| {
-        tracing::warn!("aide schema error: {error}");
-    });
-    aide::generate::extract_schemas(true);
-
     let mut openapi = OpenApi {
         info: Info {
             title: "Agent-K API".to_string(),
@@ -52,13 +54,22 @@ async fn main() -> std::io::Result<()> {
         ..Default::default()
     };
 
-    // TODO: Replace Any::new() with specific origins for production
     let cors = CorsLayer::new()
         .allow_origin(Any)
         .allow_methods(Any)
         .allow_headers(Any);
 
-    let app_state = Arc::new(AppState::new());
+    let repo = repository::create_repository_from_env()
+        .await
+        .expect("failed to initialise repository");
+
+    let store_path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(".speedwagon");
+    let store = Arc::new(RwLock::new(
+        Store::new(store_path).expect("speedwagon store init"),
+    ));
+    let toolset = build_toolset(store.clone());
+
+    let app_state = Arc::new(AppState::new(repo, store, toolset));
     let app = router::get_router(app_state)
         .finish_api(&mut openapi)
         .merge(

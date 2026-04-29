@@ -1,15 +1,11 @@
-use ailoy::message::Message;
+use ailoy::message::MessageOutput;
 use schemars::JsonSchema;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 
-#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+#[derive(Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct SendMessageRequest {
     pub content: String,
 }
 
-#[derive(Debug, Deserialize, Serialize, JsonSchema)]
-pub struct SendMessageResponse {
-    pub messages: Vec<Message>,
-    pub final_content: String,
-}
+pub type SendMessageResponse = Vec<MessageOutput>;

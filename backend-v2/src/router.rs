@@ -1,92 +1,138 @@
-use std::path::PathBuf;
-use std::sync::{Arc, OnceLock};
-use std::time::Duration;
+use std::convert::Infallible;
+use std::sync::Arc;
 
-use aide::axum::{ApiRouter, routing::post};
-use ailoy::agent::{Agent, AgentBuilder, AgentCard, default_provider};
-use ailoy::lang_model::LangModel;
-use ailoy::message::{Message, Part, Role};
-use ailoy::tool::ToolSet;
-use axum::extract::Path;
-use axum::{Json, extract::State, http::StatusCode};
+use aide::axum::{
+    ApiRouter,
+    routing::{delete, post},
+};
+use ailoy::{
+    agent::{Agent, AgentBuilder, AgentCard, default_provider},
+    lang_model::{LangModel, LangModelProvider},
+    message::{Message, MessageOutput, Part, Role},
+    runenv::{Sandbox, SandboxConfig},
+    tool::{BuiltinToolProvider, ToolSet, make_builtin_tool},
+};
+use axum::{
+    Json,
+    extract::{Path, State},
+    http::StatusCode,
+    response::sse::{Event, KeepAlive, Sse},
+};
 use chrono::Utc;
 use futures_util::StreamExt;
-use speedwagon::{SharedStore, SpeedwagonSpec, Store, build_toolset};
-use tokio::sync::RwLock;
+use speedwagon::SpeedwagonSpec;
 use uuid::Uuid;
 
 use crate::{
-    error::{ApiError, ApiResult, AppError},
+    error::{ApiResult, AppError},
     model::{CreateSessionRequest, SendMessageRequest, SendMessageResponse, SessionResponse},
     state::AppState,
 };
 
-static STORE: OnceLock<SharedStore> = OnceLock::new();
-static TOOLSET: OnceLock<ToolSet> = OnceLock::new();
+const DEFAULT_MODEL: &str = "openai/gpt-5.4-mini";
 
-pub fn speedwagon_store() -> SharedStore {
-    STORE
-        .get_or_init(|| {
-            let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(".speedwagon");
-            Arc::new(RwLock::new(
-                Store::new(path).expect("speedwagon store init"),
-            ))
-        })
-        .clone()
-}
-
-fn speedwagon_toolset() -> &'static ToolSet {
-    TOOLSET.get_or_init(|| build_toolset(speedwagon_store()))
+fn sandbox_name_for(id: &Uuid) -> String {
+    let s = id.simple().to_string();
+    format!("session-{}", &s[..12])
 }
 
 pub fn get_router(state: Arc<AppState>) -> ApiRouter {
     ApiRouter::new()
         .api_route("/sessions", post(create_session))
+        .api_route("/sessions/{id}", delete(delete_session))
         .api_route("/sessions/{id}/messages", post(send_message))
+        .route(
+            "/sessions/{id}/messages/stream",
+            axum::routing::post(send_message_stream),
+        )
+        .route(
+            "/sessions/{id}/messages",
+            axum::routing::get(get_message_history).delete(clear_message_history),
+        )
         .with_state(state)
 }
 
-const MESSAGE_TIMEOUT: Duration = Duration::from_secs(120);
+async fn build_agent(sandbox: Arc<Sandbox>, toolset: &ToolSet) -> Result<Agent, String> {
+    let provider_guard = default_provider().await;
 
-async fn send_message(
-    State(state): State<Arc<AppState>>,
-    Path(session_id): Path<Uuid>,
-    Json(payload): Json<SendMessageRequest>,
-) -> ApiResult<Json<SendMessageResponse>> {
-    let agent_handle = state
-        .get_agent(&session_id)
-        .ok_or_else(|| AppError::not_found(format!("session '{session_id}' not found")))?;
+    // Builtin tools for code execution and web search
+    let (bash, python, web_search) = tokio::try_join!(
+        make_builtin_tool(&BuiltinToolProvider::Bash {}),
+        make_builtin_tool(&BuiltinToolProvider::PythonRepl {}),
+        make_builtin_tool(&BuiltinToolProvider::WebSearch {}),
+    )
+    .map_err(|e| e.to_string())?;
 
-    let query = Message::new(Role::User).with_contents([Part::text(&payload.content)]);
+    // Speedwagon RAG subagent
+    let sw_card = AgentCard {
+        name: "speedwagon".into(),
+        description: "Search the knowledge base for answers. \
+            This tool has access to uploaded documents that may contain \
+            information the model doesn't have. \
+            Use it for any question that could be answered from the knowledge base."
+            .into(),
+        skills: vec![],
+    };
+    let sw_spec = SpeedwagonSpec::new().card(sw_card.clone()).into_spec();
+    let sw_agent = Agent::try_with_tools(sw_spec, &*provider_guard, toolset)
+        .await
+        .map_err(|e| e.to_string())?;
 
-    let result = tokio::time::timeout(MESSAGE_TIMEOUT, async {
-        let mut agent = agent_handle.lock().await;
-        let mut stream = agent.run(query);
-        let mut messages: Vec<Message> = Vec::new();
-        let mut final_content = String::new();
+    let model = build_lang_model(DEFAULT_MODEL)?;
+    drop(provider_guard);
 
-        while let Some(result) = stream.next().await {
-            let output = result.map_err(|e| AppError::internal(e.to_string()))?;
-            if output.message.role == Role::Assistant {
-                for part in &output.message.contents {
-                    if let Some(text) = part.as_text() {
-                        final_content = text.to_string();
-                    }
-                }
-            }
-            messages.push(output.message);
-        }
+    AgentBuilder::new(model)
+        .instruction(concat!(
+            "You are a versatile assistant with access to code execution tools ",
+            "(bash, python), web search, and a knowledge base (speedwagon). ",
+            "You MUST use the speedwagon tool to search the document corpus ",
+            "before answering ANY factual question — even if you think you already know the answer. ",
+            "The corpus contains authoritative information that may differ from your training data. ",
+            "Use bash and python tools for computation, data analysis, and code execution tasks. ",
+            "Only skip tools for greetings or casual conversation.",
+        ))
+        .tool(bash)
+        .tool(python)
+        .tool(web_search)
+        .sandbox(sandbox)
+        .subagent(sw_card, sw_agent)
+        .build()
+        .await
+        .map_err(|e| e.to_string())
+}
 
-        Ok::<_, ApiError>(SendMessageResponse {
-            messages,
-            final_content,
-        })
-    })
-    .await;
+// Alternative: main agent uses speedwagon tools directly (no subagent delegation).
+// Materialize speedwagon ToolFactory entries for the main agent's spec so it can
+// call search functions itself, instead of routing through a dedicated subagent.
+//
 
-    match result {
-        Ok(inner) => Ok(Json(inner?)),
-        Err(_elapsed) => Err(AppError::internal("agent response timed out")),
+fn build_lang_model(model_full_id: &str) -> Result<LangModel, String> {
+    if let Some(m) = model_full_id.strip_prefix("anthropic/") {
+        let key = std::env::var("ANTHROPIC_API_KEY")
+            .map_err(|_| "ANTHROPIC_API_KEY not set".to_string())?;
+        Ok(LangModel::new(
+            m.to_string(),
+            LangModelProvider::anthropic(key),
+        ))
+    } else if let Some(m) = model_full_id.strip_prefix("openai/") {
+        let key =
+            std::env::var("OPENAI_API_KEY").map_err(|_| "OPENAI_API_KEY not set".to_string())?;
+        Ok(LangModel::new(
+            m.to_string(),
+            LangModelProvider::openai(key),
+        ))
+    } else if let Some(m) = model_full_id.strip_prefix("google/") {
+        let key =
+            std::env::var("GEMINI_API_KEY").map_err(|_| "GEMINI_API_KEY not set".to_string())?;
+        Ok(LangModel::new(
+            m.to_string(),
+            LangModelProvider::gemini(key),
+        ))
+    } else {
+        Err(format!(
+            "unknown provider prefix in model id: {}",
+            model_full_id
+        ))
     }
 }
 
@@ -94,65 +140,33 @@ async fn create_session(
     State(state): State<Arc<AppState>>,
     Json(_payload): Json<CreateSessionRequest>,
 ) -> ApiResult<(StatusCode, Json<SessionResponse>)> {
-    let provider_guard = default_provider().await;
-    let agent: Agent;
-
-    // Initialize Speedwagon agent as a subagent
-    {
-        let sw_card = AgentCard {
-            name: "speedwagon".into(),
-            description: "Search the knowledge base for answers. \
-                This tool has access to uploaded documents that may contain \
-                information the model doesn't have. \
-                Use it for any question that could be answered from the knowledge base."
-                .into(),
-            skills: vec![],
-        };
-        let sw_spec = SpeedwagonSpec::new().card(sw_card.clone()).into_spec();
-        let sw_agent = Agent::try_with_tools(sw_spec, &*provider_guard, speedwagon_toolset())
-            .await
-            .map_err(|e| AppError::internal(e.to_string()))?;
-
-        let main_model_name = "openai/gpt-5.4-mini";
-        let model_id = main_model_name
-            .split_once('/')
-            .map(|(_, id)| id)
-            .unwrap_or(main_model_name);
-        let model_provider = provider_guard
-            .get_model(main_model_name)
-            .ok_or_else(|| {
-                AppError::internal(format!("No provider for model '{main_model_name}'"))
-            })?
-            .clone();
-        let model = LangModel::new(model_id.to_string(), model_provider);
-        drop(provider_guard);
-
-        agent = AgentBuilder::new(model)
-            .instruction(concat!(
-                "You are a document-aware assistant. ",
-                "You MUST use the speedwagon tool to search the document corpus ",
-                "before answering ANY factual question — even if you think you already know the answer. ",
-                "The corpus contains authoritative information that may differ from your training data. ",
-                "Only skip the tool for greetings or casual conversation.",
-            ))
-            .subagent(sw_card, sw_agent)
-            .build()
-            .await
-            .map_err(|e| AppError::internal(e.to_string()))?;
-    }
-
-    // // Alternative: Speedwagon을 main agent로 직접 사용 (subagent 패턴 없이)
-    // {
-    //     let spec = SpeedwagonSpec::new().into_spec();
-    //     agent = Agent::try_with_tools(spec, &*provider_guard, speedwagon_toolset())
-    //         .await
-    //         .map_err(|e| AppError::internal(e.to_string()))?;
-    //     drop(provider_guard);
-    // }
-
     let id = Uuid::new_v4();
+    let sandbox_name = sandbox_name_for(&id);
+
+    let cfg = SandboxConfig {
+        name: Some(sandbox_name.clone()),
+        persist: true,
+        ..Default::default()
+    };
+    let sandbox = Arc::new(
+        Sandbox::new(cfg)
+            .await
+            .map_err(|e| AppError::internal(e.to_string()))?,
+    );
+
+    let agent = build_agent(sandbox, &state.toolset)
+        .await
+        .map_err(|e| AppError::internal(e))?;
+
     let now = Utc::now();
+    state
+        .repository
+        .create_session(id)
+        .await
+        .map_err(|e| AppError::internal(e.to_string()))?;
     state.insert_agent(id, agent);
+
+    tracing::info!(%id, sandbox = %sandbox_name, "session created");
 
     Ok((
         StatusCode::CREATED,
@@ -164,53 +178,217 @@ async fn create_session(
     ))
 }
 
-// async fn list_sessions(
-//     State(state): State<AppState_>,
-//     Query(query): Query<ListSessionsQuery>,
-// ) -> Result<Json<Vec<SessionResponse>>, (StatusCode, Json<AppError>)> {
-//     let ListSessionsQuery {
-//         agent_id,
-//         include_messages,
-//     } = query;
+async fn delete_session(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<Uuid>,
+) -> ApiResult<StatusCode> {
+    if state
+        .repository
+        .get_session(id)
+        .await
+        .map_err(|e| AppError::internal(e.to_string()))?
+        .is_none()
+    {
+        return Err(AppError::not_found("session not found"));
+    }
 
-//     let sessions = state
-//         .repository
-//         .list_sessions(agent_id, include_messages.unwrap_or(false))
-//         .await
-//         .map_err(repo_err)?;
-//     Ok(Json(sessions.iter().map(SessionResponse::from).collect()))
-// }
+    state
+        .repository
+        .delete_session(id)
+        .await
+        .map_err(|e| AppError::internal(e.to_string()))?;
+    let agent_arc = state.remove_agent(&id);
 
-// async fn get_session(
-//     State(state): State<AppState_>,
-//     Path(id): Path<Uuid>,
-// ) -> ApiResult<Json<SessionDetailResponse>> {
-//     match session_service::get_session_detail(&state, id)
-//         .await
-//         .map_err(session_err)?
-//     {
-//         Some(detail) => Ok(Json(detail)),
-//         None => Err(AppError::not_found("session not found")),
-//     }
-// }
+    if let Some(arc) = agent_arc {
+        drop(arc.lock().await);
+        drop(arc);
+    }
 
-// async fn update_session(
-//     State(state): State<AppState_>,
-//     Path(id): Path<Uuid>,
-//     Json(payload): Json<UpdateSessionRequest>,
-// ) -> Result<Json<SessionResponse>, (StatusCode, Json<AppError>)> {
-//     let session = session_service::update_session(&state, id, payload)
-//         .await
-//         .map_err(|e| AppError::internal(e.to_string()))?;
-//     Ok(Json(SessionResponse::from(&session)))
-// }
+    let sandbox_name = sandbox_name_for(&id);
+    if let Err(e) = ailoy::runenv::remove_persisted(&sandbox_name).await {
+        tracing::warn!(%id, "failed to remove persisted sandbox: {e}");
+    }
 
-// async fn delete_session(
-//     State(state): State<AppState_>,
-//     Path(id): Path<Uuid>,
-// ) -> Result<StatusCode, (StatusCode, Json<AppError>)> {
-//     session_service::delete_session(&state, id)
-//         .await
-//         .map_err(|e| AppError::internal(e.to_string()))?;
-//     Ok(StatusCode::NO_CONTENT)
-// }
+    tracing::info!(%id, "session deleted");
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// Resolve or lazy-create the in-memory agent for `id`.
+///
+/// On the first request after a server restart the agent is not in memory but
+/// the session and its message history are in the DB. This function rebuilds
+/// the agent and restores the history so the next turn starts with full context.
+async fn resolve_agent(
+    state: &Arc<AppState>,
+    id: Uuid,
+) -> ApiResult<Arc<tokio::sync::Mutex<Agent>>> {
+    if let Some(arc) = state.get_agent(&id) {
+        return Ok(arc);
+    }
+
+    let session_exists = state
+        .repository
+        .get_session(id)
+        .await
+        .map_err(|e| AppError::internal(e.to_string()))?
+        .is_some();
+
+    if !session_exists {
+        return Err(AppError::not_found("session not found"));
+    }
+
+    let history = state
+        .repository
+        .get_messages(id)
+        .await
+        .map_err(|e| AppError::internal(e.to_string()))?;
+
+    let sandbox_name = sandbox_name_for(&id);
+    let cfg = SandboxConfig {
+        name: Some(sandbox_name),
+        persist: true,
+        ..Default::default()
+    };
+    let sandbox = Arc::new(
+        Sandbox::new(cfg)
+            .await
+            .map_err(|e| AppError::internal(e.to_string()))?,
+    );
+
+    let mut agent = build_agent(sandbox, &state.toolset)
+        .await
+        .map_err(|e| AppError::internal(e))?;
+
+    agent.state.history = history;
+    tracing::info!(%id, "agent lazy-created with history restored");
+
+    if let Some(existing) = state.get_agent(&id) {
+        return Ok(existing);
+    }
+    state.insert_agent(id, agent);
+    Ok(state.get_agent(&id).unwrap())
+}
+
+async fn get_message_history(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<Uuid>,
+) -> ApiResult<Json<Vec<Message>>> {
+    if state
+        .repository
+        .get_session(id)
+        .await
+        .map_err(|e| AppError::internal(e.to_string()))?
+        .is_none()
+    {
+        return Err(AppError::not_found("session not found"));
+    }
+    let messages = state
+        .repository
+        .get_messages(id)
+        .await
+        .map_err(|e| AppError::internal(e.to_string()))?;
+    Ok(Json(messages))
+}
+
+async fn clear_message_history(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<Uuid>,
+) -> ApiResult<StatusCode> {
+    if state
+        .repository
+        .get_session(id)
+        .await
+        .map_err(|e| AppError::internal(e.to_string()))?
+        .is_none()
+    {
+        return Err(AppError::not_found("session not found"));
+    }
+    state
+        .repository
+        .clear_messages(id)
+        .await
+        .map_err(|e| AppError::internal(e.to_string()))?;
+
+    if let Some(arc) = state.get_agent(&id) {
+        arc.lock().await.state.history.clear();
+    }
+
+    tracing::info!(%id, "message history cleared");
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn send_message(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<Uuid>,
+    Json(payload): Json<SendMessageRequest>,
+) -> ApiResult<Json<SendMessageResponse>> {
+    let agent_arc = resolve_agent(&state, id).await?;
+
+    let prev_len = agent_arc.lock().await.get_history().len();
+
+    let outputs = {
+        let mut agent = agent_arc.lock().await;
+        let msg = Message::new(Role::User).with_contents([Part::text(payload.content)]);
+        let mut stream = agent.run(msg);
+        let mut outputs: Vec<MessageOutput> = Vec::new();
+        while let Some(item) = stream.next().await {
+            outputs.push(item.map_err(|e| AppError::internal(e.to_string()))?);
+        }
+        outputs
+    };
+
+    let new_messages = {
+        let agent = agent_arc.lock().await;
+        agent.get_history()[prev_len..].to_vec()
+    };
+    state
+        .repository
+        .append_messages(id, &new_messages)
+        .await
+        .map_err(|e| AppError::internal(e.to_string()))?;
+
+    Ok(Json(outputs))
+}
+
+async fn send_message_stream(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<Uuid>,
+    Json(payload): Json<SendMessageRequest>,
+) -> ApiResult<Sse<impl futures_util::Stream<Item = Result<Event, Infallible>> + Send + 'static>> {
+    let agent_arc = resolve_agent(&state, id).await?;
+    let repo = state.repository.clone();
+    let prev_len = agent_arc.lock().await.get_history().len();
+    let content = payload.content;
+
+    let stream = async_stream::stream! {
+        let mut agent = agent_arc.lock().await;
+        let msg = Message::new(Role::User).with_contents([Part::text(content)]);
+        let mut run = agent.run(msg);
+
+        while let Some(item) = run.next().await {
+            match item {
+                Ok(output) => {
+                    let json = serde_json::to_string(&output)
+                        .unwrap_or_else(|e| format!("{{\"error\":\"{e}}}", e = e));
+                    yield Ok::<Event, Infallible>(
+                        Event::default().event("message").data(json),
+                    );
+                }
+                Err(e) => {
+                    yield Ok(Event::default().event("error").data(e.to_string()));
+                    return;
+                }
+            }
+        }
+        drop(run);
+
+        let new_msgs = agent.get_history()[prev_len..].to_vec();
+        if let Err(e) = repo.append_messages(id, &new_msgs).await {
+            tracing::error!(%id, "failed to persist messages: {e}");
+        }
+
+        yield Ok(Event::default().event("done").data("[DONE]"));
+    };
+
+    Ok(Sse::new(stream).keep_alive(KeepAlive::default()))
+}
