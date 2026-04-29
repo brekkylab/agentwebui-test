@@ -101,9 +101,10 @@ async fn create_session(
     {
         let sw_card = AgentCard {
             name: "speedwagon".into(),
-            description: "Search a local document corpus and read passages. \
-                Use when the user asks about documents, facts, quotes, citations, \
-                or computations on document data."
+            description: "Search the knowledge base for answers. \
+                This tool has access to uploaded documents that may contain \
+                information the model doesn't have. \
+                Use it for any question that could be answered from the knowledge base."
                 .into(),
             skills: vec![],
         };
@@ -112,7 +113,7 @@ async fn create_session(
             .await
             .map_err(|e| AppError::internal(e.to_string()))?;
 
-        let main_model_name = "openai/gpt-4.5-mini";
+        let main_model_name = "openai/gpt-5.4-mini";
         let model_id = main_model_name
             .split_once('/')
             .map(|(_, id)| id)
@@ -127,6 +128,13 @@ async fn create_session(
         drop(provider_guard);
 
         agent = AgentBuilder::new(model)
+            .instruction(concat!(
+                "You are a document-aware assistant. ",
+                "You MUST use the speedwagon tool to search the document corpus ",
+                "before answering ANY factual question — even if you think you already know the answer. ",
+                "The corpus contains authoritative information that may differ from your training data. ",
+                "Only skip the tool for greetings or casual conversation.",
+            ))
             .subagent(sw_card, sw_agent)
             .build()
             .await
