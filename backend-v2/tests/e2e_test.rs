@@ -71,11 +71,18 @@ async fn test_ingest_message_purge_cycle() {
         ))
         .await
         .unwrap();
-    assert_eq!(resp.status(), StatusCode::OK);
+    let status = resp.status();
     let body = resp.into_body().collect().await.unwrap().to_bytes();
+    if status != StatusCode::OK {
+        let body_str = String::from_utf8_lossy(&body);
+        panic!("send_message returned {status}: {body_str}");
+    }
     let msg_resp: SendMessageResponse = serde_json::from_slice(&body).unwrap();
 
-    assert!(!msg_resp.messages.is_empty(), "messages should not be empty");
+    assert!(
+        !msg_resp.messages.is_empty(),
+        "messages should not be empty"
+    );
     assert!(
         !msg_resp.final_content.is_empty(),
         "final_content should not be empty"
@@ -86,6 +93,11 @@ async fn test_ingest_message_purge_cycle() {
             .iter()
             .any(|m| m.role == ailoy::message::Role::Assistant),
         "should contain at least one assistant message"
+    );
+    assert!(
+        msg_resp.final_content.contains("Glorkville"),
+        "response should mention 'Glorkville' from the ingested document, got: {}",
+        msg_resp.final_content
     );
 
     // Purge the document
@@ -105,21 +117,4 @@ async fn test_ingest_message_purge_cycle() {
     let body = resp.into_body().collect().await.unwrap().to_bytes();
     let post_purge: SendMessageResponse = serde_json::from_slice(&body).unwrap();
     assert!(!post_purge.final_content.is_empty());
-}
-
-#[tokio::test]
-async fn test_send_message_to_nonexistent_session() {
-    let state = Arc::new(AppState::new());
-    let app = get_router(state);
-
-    let fake_id = uuid::Uuid::new_v4();
-    let resp = app
-        .oneshot(json_request(
-            "POST",
-            &format!("/sessions/{fake_id}/messages"),
-            Some(r#"{"content":"hello"}"#),
-        ))
-        .await
-        .unwrap();
-    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
 }

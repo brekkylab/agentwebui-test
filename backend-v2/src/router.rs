@@ -95,44 +95,52 @@ async fn create_session(
     Json(_payload): Json<CreateSessionRequest>,
 ) -> ApiResult<(StatusCode, Json<SessionResponse>)> {
     let provider_guard = default_provider().await;
+    let agent: Agent;
 
-    let sw_card = AgentCard {
-        name: "speedwagon".into(),
-        description: "Search a local document corpus and read passages. \
-            Use when the user asks about documents, facts, quotes, citations, \
-            or computations on document data."
-            .into(),
-        skills: vec![],
-    };
-    let sw_spec = SpeedwagonSpec::new().card(sw_card.clone()).into_spec();
-    let sw_agent = Agent::try_with_tools(sw_spec, &*provider_guard, speedwagon_toolset())
-        .await
-        .map_err(|e| AppError::internal(e.to_string()))?;
+    // Initialize Speedwagon agent as a subagent
+    {
+        let sw_card = AgentCard {
+            name: "speedwagon".into(),
+            description: "Search a local document corpus and read passages. \
+                Use when the user asks about documents, facts, quotes, citations, \
+                or computations on document data."
+                .into(),
+            skills: vec![],
+        };
+        let sw_spec = SpeedwagonSpec::new().card(sw_card.clone()).into_spec();
+        let sw_agent = Agent::try_with_tools(sw_spec, &*provider_guard, speedwagon_toolset())
+            .await
+            .map_err(|e| AppError::internal(e.to_string()))?;
 
-    let main_model_name = "openai/gpt-4.5-mini";
-    let model_id = main_model_name
-        .split_once('/')
-        .map(|(_, id)| id)
-        .unwrap_or(main_model_name);
-    let model_provider = provider_guard
-        .get_model(main_model_name)
-        .ok_or_else(|| AppError::internal(format!("No provider for model '{main_model_name}'")))?
-        .clone();
-    let model = LangModel::new(model_id.to_string(), model_provider);
-    drop(provider_guard);
+        let main_model_name = "openai/gpt-4.5-mini";
+        let model_id = main_model_name
+            .split_once('/')
+            .map(|(_, id)| id)
+            .unwrap_or(main_model_name);
+        let model_provider = provider_guard
+            .get_model(main_model_name)
+            .ok_or_else(|| {
+                AppError::internal(format!("No provider for model '{main_model_name}'"))
+            })?
+            .clone();
+        let model = LangModel::new(model_id.to_string(), model_provider);
+        drop(provider_guard);
 
-    let agent = AgentBuilder::new(model)
-        .subagent(sw_card, sw_agent)
-        .build()
-        .await
-        .map_err(|e| AppError::internal(e.to_string()))?;
+        agent = AgentBuilder::new(model)
+            .subagent(sw_card, sw_agent)
+            .build()
+            .await
+            .map_err(|e| AppError::internal(e.to_string()))?;
+    }
 
-    // Alternative: Speedwagon을 main agent로 직접 사용 (subagent 패턴 없이)
-    // let spec = SpeedwagonSpec::new().model(main_model_name).card(sw_card).into_spec();
-    // let agent = Agent::try_with_tools(spec, &*provider_guard, speedwagon_toolset())
-    //     .await
-    //     .map_err(|e| AppError::internal(e.to_string()))?;
-    // drop(provider_guard);
+    // // Alternative: Speedwagon을 main agent로 직접 사용 (subagent 패턴 없이)
+    // {
+    //     let spec = SpeedwagonSpec::new().into_spec();
+    //     agent = Agent::try_with_tools(spec, &*provider_guard, speedwagon_toolset())
+    //         .await
+    //         .map_err(|e| AppError::internal(e.to_string()))?;
+    //     drop(provider_guard);
+    // }
 
     let id = Uuid::new_v4();
     let now = Utc::now();
