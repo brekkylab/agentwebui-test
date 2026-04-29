@@ -1,12 +1,15 @@
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use agent_k_backend::{repository, router, state::AppState};
 use aide::axum::ApiRouter;
 use aide::openapi::{Info, OpenApi};
 use aide::scalar::Scalar;
+use ailoy::agent::default_provider_mut;
 use axum::Extension;
 use axum::response::IntoResponse;
-use tokio::sync::Mutex;
+use speedwagon::{Store, build_toolset};
+use tokio::sync::RwLock;
 use tower_http::cors::{Any, CorsLayer};
 
 #[tokio::main]
@@ -28,6 +31,20 @@ async fn main() -> std::io::Result<()> {
     });
     aide::generate::extract_schemas(true);
 
+    // Register API keys with the global provider (needed by Agent::try_with_tools)
+    {
+        let mut provider = default_provider_mut().await;
+        if let Ok(key) = std::env::var("OPENAI_API_KEY") {
+            provider.model_openai(key);
+        }
+        if let Ok(key) = std::env::var("ANTHROPIC_API_KEY") {
+            provider.model_claude(key);
+        }
+        if let Ok(key) = std::env::var("GEMINI_API_KEY") {
+            provider.model_gemini(key);
+        }
+    }
+
     let mut openapi = OpenApi {
         info: Info {
             title: "Agent-K API".to_string(),
@@ -46,7 +63,13 @@ async fn main() -> std::io::Result<()> {
         .await
         .expect("failed to initialise repository");
 
-    let app_state = Arc::new(Mutex::new(AppState::new(repo)));
+    let store_path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(".speedwagon");
+    let store = Arc::new(RwLock::new(
+        Store::new(store_path).expect("speedwagon store init"),
+    ));
+    let toolset = build_toolset(store.clone());
+
+    let app_state = Arc::new(AppState::new(repo, store, toolset));
     let app = router::get_router(app_state)
         .finish_api(&mut openapi)
         .merge(

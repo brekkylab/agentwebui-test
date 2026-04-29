@@ -12,16 +12,17 @@ use std::path::Path;
 use std::sync::Arc;
 
 use agent_k_backend::state::AppState;
+use ailoy::agent::default_provider_mut;
 use common::{
     delete_session, extract_text, extract_text_from_slice, make_app_with_state, make_repo,
-    post_session, send_message, send_message_stream,
+    make_test_store, post_session, send_message, send_message_stream,
 };
-use tokio::sync::Mutex;
 
 // ── helpers ───────────────────────────────────────────────────────────────────
 
-async fn make_state() -> Arc<Mutex<AppState>> {
-    Arc::new(Mutex::new(AppState::new(make_repo().await)))
+async fn make_state() -> Arc<AppState> {
+    let (store, toolset) = make_test_store();
+    Arc::new(AppState::new(make_repo().await, store, toolset))
 }
 
 // ── tests ─────────────────────────────────────────────────────────────────────
@@ -34,9 +35,11 @@ async fn make_state() -> Arc<Mutex<AppState>> {
 #[tokio::test]
 #[ignore = "requires microsandbox; boots two VMs"]
 async fn two_sessions_get_isolated_sandboxes() {
-    if std::env::var("ANTHROPIC_API_KEY").is_err() {
-        unsafe {
-            std::env::set_var("ANTHROPIC_API_KEY", "dummy");
+    dotenvy::dotenv().ok();
+    {
+        let mut provider = default_provider_mut().await;
+        if let Ok(key) = std::env::var("OPENAI_API_KEY") {
+            provider.model_openai(key);
         }
     }
 
@@ -48,9 +51,8 @@ async fn two_sessions_get_isolated_sandboxes() {
     assert_ne!(id1, id2, "two sessions must have different ids");
 
     let (re1, re2) = {
-        let st = state.lock().await;
-        let a1 = st.get_agent(&id1).expect("session 1 not found");
-        let a2 = st.get_agent(&id2).expect("session 2 not found");
+        let a1 = state.get_agent(&id1).expect("session 1 not found");
+        let a2 = state.get_agent(&id2).expect("session 2 not found");
         // Agents are not running now, so try_lock succeeds.
         let guard1 = a1.try_lock().expect("agent 1 locked unexpectedly");
         let guard2 = a2.try_lock().expect("agent 2 locked unexpectedly");
@@ -90,6 +92,12 @@ async fn two_sessions_get_isolated_sandboxes() {
 #[ignore = "requires microsandbox + ANTHROPIC_API_KEY"]
 async fn agent_writes_and_reads_file_via_bash_in_sandbox() {
     dotenvy::dotenv().ok();
+    {
+        let mut provider = default_provider_mut().await;
+        if let Ok(key) = std::env::var("OPENAI_API_KEY") {
+            provider.model_openai(key);
+        }
+    }
 
     let state = make_state().await;
     let app = make_app_with_state(state.clone());
@@ -112,7 +120,7 @@ async fn agent_writes_and_reads_file_via_bash_in_sandbox() {
     );
 
     // Verify via runenv directly that the file exists in the sandbox.
-    let agent_arc = state.lock().await.get_agent(&id).unwrap();
+    let agent_arc = state.get_agent(&id).unwrap();
     let agent = agent_arc.lock().await;
     let contents = agent
         .state
@@ -138,9 +146,11 @@ async fn stream_returns_404_for_unknown_session() {
     use axum::{body::Body, http::Request};
     use tower::ServiceExt;
 
-    if std::env::var("ANTHROPIC_API_KEY").is_err() {
-        unsafe {
-            std::env::set_var("ANTHROPIC_API_KEY", "dummy");
+    dotenvy::dotenv().ok();
+    {
+        let mut provider = default_provider_mut().await;
+        if let Ok(key) = std::env::var("OPENAI_API_KEY") {
+            provider.model_openai(key);
         }
     }
 
@@ -168,7 +178,12 @@ async fn stream_returns_404_for_unknown_session() {
 #[ignore = "requires microsandbox + ANTHROPIC_API_KEY"]
 async fn agent_writes_and_reads_file_via_bash_streaming() {
     dotenvy::dotenv().ok();
-
+    {
+        let mut provider = default_provider_mut().await;
+        if let Ok(key) = std::env::var("OPENAI_API_KEY") {
+            provider.model_openai(key);
+        }
+    }
     let state = make_state().await;
     let app = make_app_with_state(state.clone());
 
@@ -195,7 +210,7 @@ async fn agent_writes_and_reads_file_via_bash_streaming() {
     );
 
     // Verify the file persisted in the sandbox after the stream ended.
-    let agent_arc = state.lock().await.get_agent(&id).unwrap();
+    let agent_arc = state.get_agent(&id).unwrap();
     let agent = agent_arc.lock().await;
     let contents = agent
         .state

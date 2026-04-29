@@ -7,7 +7,8 @@ use agent_k_backend::{repository, router, state::AppState};
 use aide::openapi::OpenApi;
 use axum::{body::Body, http::Request};
 use http_body_util::BodyExt;
-use tokio::sync::Mutex;
+use speedwagon::{Store, build_toolset};
+use tokio::sync::RwLock;
 use tower::ServiceExt;
 
 // ── App / state creation ──────────────────────────────────────────────────────
@@ -19,15 +20,26 @@ pub async fn make_repo() -> repository::AppRepository {
         .unwrap()
 }
 
+/// Create a SharedStore + ToolSet backed by a temporary directory.
+pub fn make_test_store() -> (speedwagon::SharedStore, ailoy::tool::ToolSet) {
+    let store_path = std::env::temp_dir().join(format!("speedwagon-test-{}", uuid::Uuid::new_v4()));
+    let store = Arc::new(RwLock::new(
+        Store::new(store_path).expect("test store init"),
+    ));
+    let toolset = build_toolset(store.clone());
+    (store, toolset)
+}
+
 /// Build an app from an already-constructed repository.
 pub fn make_app_with_repo(repo: repository::AppRepository) -> axum::Router {
-    let state = Arc::new(Mutex::new(AppState::new(repo)));
+    let (store, toolset) = make_test_store();
+    let state = Arc::new(AppState::new(repo, store, toolset));
     make_app_with_state(state)
 }
 
 /// Build an app from an already-constructed state (useful when tests need to
 /// inspect the state directly, e.g. to read agent internals).
-pub fn make_app_with_state(state: Arc<Mutex<AppState>>) -> axum::Router {
+pub fn make_app_with_state(state: Arc<AppState>) -> axum::Router {
     router::get_router(state).finish_api(&mut OpenApi::default())
 }
 
