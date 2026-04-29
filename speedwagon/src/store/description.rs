@@ -1,30 +1,8 @@
-//! KB-level description generation from per-document `(title, purpose)` tuples.
-//!
-//! Pairs with `parser::PurposeAgent`: where `PurposeAgent` produces one
-//! line of search-tuned metadata per document, `DescriptionAgent` produces
-//! one line of routing-tuned metadata per knowledge base.
-//!
-//! This module is a library — it does not own any database, HTTP surface,
-//! or "Manual vs Auto" policy. Callers (backend, CLI) decide when to call
-//! `Store::describe`, what to do with the result, and how to persist it.
-//!
-//! Output shape chosen by offline experiments on financebench / cuad /
-//! kpaperqa / bioasq:
-//!
-//! - The description is self-contained: it states what is *inside* the
-//!   KB (document types, entities covered, topics it can answer) without
-//!   referencing any other KB. The routing agent that reads several KB
-//!   descriptions side-by-side does the comparison from a higher level;
-//!   we don't bake that comparison into each description, so an
-//!   adjacent KB being renamed or removed cannot stale a description.
-//! - Target output ~200 chars: shortest length that still preserved a
-//!   coherent identity sentence in the experiments.
-//! - Input is each doc's `purpose` only — adding `title` did not improve
-//!   routing on the probe set and increased input tokens by ~25%.
-//! - On LLM failure, `fallback_description` returns
-//!   `"{N} documents including: {top-5 titles}"`. Empty string would have
-//!   silently degraded routing (an empty description anchored a wrong KB
-//!   in the experiments).
+//! KB-level description for a routing agent. Built from each doc's `purpose`
+//! (titles are kept for the fallback). Output stays self-contained — no
+//! mention of peer KBs — so a renamed or removed neighbor cannot stale it.
+//! Korean output lands ~1/3 the chars of English at the same budget;
+//! per-language budgets are deferred until a near-domain Korean KB shows up.
 
 use ailoy::{
     agent::{Agent, AgentProvider, AgentSpec},
@@ -36,24 +14,21 @@ use futures::StreamExt as _;
 const MODEL: &str = "openai/gpt-5.4-mini";
 
 const DESCRIPTION_INSTRUCTION: &str = concat!(
-    "You write a description of a knowledge base for a routing agent. ",
-    "The routing agent reads this description alongside descriptions of other ",
-    "knowledge bases and picks the right one for a user's question. ",
+    "You write a self-contained description of a knowledge base. ",
+    "This description will be read by a routing agent that picks the right ",
+    "knowledge base for a user's question. ",
     "Inputs: KB name, optional instruction, and a list of one-line document purposes. ",
     "Describe what is INSIDE this knowledge base — its document types, ",
     "the entities and time periods covered, and the topics it can answer. ",
     "Lead with the collective identity of the documents. ",
-    "Do not compare this KB to others, list what it excludes, or mention ",
-    "neighboring KB names. The routing agent does that comparison from a ",
-    "higher level; your job is to describe this KB on its own terms. ",
+    "Describe this KB on its own terms — do not compare it to other KBs, ",
+    "list what it excludes, or mention neighboring KB names. ",
     "Output must NOT mention dataset names, QA pairs, paper IDs, contract IDs, ",
     "or any metadata about how this knowledge base was assembled. ",
     "Describe ONLY what documents are inside, as if a curator wrote it. ",
     "Length: ~200 characters. Output a JSON object: {\"description\": \"<text>\"}."
 );
 
-/// Wraps an Ailoy agent that turns a `(title, purpose)` document list into
-/// a single KB-level description string.
 pub struct DescriptionAgent {
     spec: AgentSpec,
     provider: Option<AgentProvider>,
@@ -67,12 +42,8 @@ impl DescriptionAgent {
         }
     }
 
-    /// Generate a KB-level description.
-    ///
-    /// `docs` is the full `(title, purpose)` list for the KB. Only `purpose`
-    /// is rendered into the user message; `title` is kept in the signature
-    /// so callers can feed the same slice to `fallback_description` when
-    /// the LLM call returns empty.
+    /// Only `purpose` is sent to the LLM; `title` is kept in the signature
+    /// so the caller can feed the same slice to `fallback_description`.
     pub async fn generate(
         &self,
         kb_name: &str,
@@ -124,9 +95,7 @@ fn build_user_message(
     s
 }
 
-/// Mirrors `parser::parse_purpose_response`: try direct JSON, retry after
-/// stripping any text around the JSON object, fall back to empty string.
-/// An empty return signals the caller to use `fallback_description`.
+/// Empty return signals the caller to use `fallback_description`.
 fn parse_description_response(raw: &str) -> String {
     let trimmed = raw.trim();
     if trimmed.is_empty() {
@@ -152,12 +121,9 @@ fn parse_description_response(raw: &str) -> String {
     String::new()
 }
 
-/// Module-level entry point that mirrors `parser::get_title` /
-/// `parser::get_purpose`: read `OPENAI_API_KEY` from the environment,
-/// build the provider, run `DescriptionAgent`, and substitute
-/// `fallback_description` if the LLM call returns an empty body. Pure
-/// transport errors (missing key, network) propagate so the caller can
-/// surface them.
+/// Reads `OPENAI_API_KEY` from the environment, runs `DescriptionAgent`, and
+/// substitutes `fallback_description` if the LLM body is empty. Transport
+/// errors (missing key, network) propagate.
 pub async fn get_description(
     kb_name: &str,
     instruction: Option<&str>,
@@ -181,11 +147,7 @@ pub async fn get_description(
     }
 }
 
-/// Deterministic fallback used when the LLM call fails or returns empty.
-///
-/// The string is short enough to fit a system prompt's KB list and still
-/// names the entities a routing agent needs. Doc count of zero produces an
-/// empty string — there is nothing to describe.
+/// Deterministic fallback when the LLM call fails or returns empty.
 pub fn fallback_description(doc_count: usize, top_titles: &[String]) -> String {
     if doc_count == 0 {
         return String::new();
