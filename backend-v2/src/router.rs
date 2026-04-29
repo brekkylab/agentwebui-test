@@ -6,7 +6,7 @@ use aide::axum::{
     routing::{delete, post},
 };
 use ailoy::{
-    agent::{Agent, AgentBuilder, AgentCard, default_provider},
+    agent::{Agent, AgentBuilder, AgentCard, AgentSpec, default_provider},
     lang_model::{LangModel, LangModelProvider},
     message::{Message, MessageOutput, Part, Role},
     runenv::{Sandbox, SandboxConfig},
@@ -105,6 +105,39 @@ async fn build_agent(sandbox: Arc<Sandbox>, toolset: &ToolSet) -> Result<Agent, 
 // Materialize speedwagon ToolFactory entries for the main agent's spec so it can
 // call search functions itself, instead of routing through a dedicated subagent.
 //
+// async fn build_agent(sandbox: Arc<Sandbox>, toolset: &ToolSet) -> Result<Agent, String> {
+//     let (bash, python, web_search) = tokio::try_join!(
+//         make_builtin_tool(&BuiltinToolProvider::Bash {}),
+//         make_builtin_tool(&BuiltinToolProvider::PythonRepl {}),
+//         make_builtin_tool(&BuiltinToolProvider::WebSearch {}),
+//     )
+//     .map_err(|e| e.to_string())?;
+
+//     let model = build_lang_model(DEFAULT_MODEL)?;
+//     let stub_spec = AgentSpec::new(DEFAULT_MODEL);
+
+//     let mut builder = AgentBuilder::new(model)
+//         .instruction(concat!(
+//             "You are a versatile assistant with access to code execution tools ",
+//             "(bash, python), web search, and a knowledge base. ",
+//             "You MUST use the knowledge base search tools ",
+//             "before answering ANY factual question. ",
+//             "Use bash and python tools for computation and code execution tasks. ",
+//             "Only skip tools for greetings or casual conversation.",
+//         ))
+//         .tool(bash)
+//         .tool(python)
+//         .tool(web_search)
+//         .sandbox(sandbox);
+
+//     // Materialize each speedwagon ToolFactory into a concrete Tool.
+//     // ToolFactory::make(spec) selects the right implementation (e.g. sandbox-aware).
+//     for (_name, factory) in toolset.iter() {
+//         builder = builder.tool(factory.make(&stub_spec));
+//     }
+
+//     builder.build().await.map_err(|e| e.to_string())
+// }
 
 fn build_lang_model(model_full_id: &str) -> Result<LangModel, String> {
     if let Some(m) = model_full_id.strip_prefix("anthropic/") {
