@@ -39,3 +39,8 @@ impl From<DbSession> for SessionResponse {
         }
     }
 }
+
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct SessionListResponse {
+    pub items: Vec<SessionResponse>,
+}

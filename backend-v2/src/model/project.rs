@@ -65,8 +65,3 @@ pub struct ProjectListResponse {
 pub struct ProjectMemberListResponse {
     pub items: Vec<ProjectMemberResponse>,
 }
-
-#[derive(Debug, Serialize, JsonSchema)]
-pub struct SessionListResponse {
-    pub items: Vec<crate::model::SessionResponse>,
-}
