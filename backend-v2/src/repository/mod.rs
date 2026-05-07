@@ -1,16 +1,16 @@
 mod sqlite;
 mod user;
 mod session;
+mod project;
 pub use user::{DbUser, NewUser, UpdateUser};
 pub use session::{DbSession, SessionAccess, ShareMode};
+pub use project::{DbProject, DbProjectMember};
 
 use std::{sync::Arc, time::Duration};
 
-use chrono::{DateTime, Utc};
 pub use sqlite::SqliteRepository;
 use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous};
 use thiserror::Error;
-use uuid::Uuid;
 
 const DEFAULT_DB_PATH: &str = "sqlite://./data/agent-k.db";
 
@@ -36,23 +36,6 @@ pub enum RepositoryError {
 }
 
 pub type RepositoryResult<T> = Result<T, RepositoryError>;
-
-#[derive(Debug, Clone)]
-pub struct DbProject {
-    pub id: Uuid,
-    pub name: String,
-    pub description: Option<String>,
-    pub owner_id: Uuid,
-    pub created_at: DateTime<Utc>,
-    pub updated_at: DateTime<Utc>,
-}
-
-#[derive(Debug, Clone)]
-pub struct DbProjectMember {
-    pub project_id: Uuid,
-    pub user_id: Uuid,
-    pub added_at: DateTime<Utc>,
-}
 
 pub type AppRepository = Arc<SqliteRepository>;
 
