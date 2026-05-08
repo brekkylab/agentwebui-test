@@ -183,7 +183,9 @@ pub async fn remove_member(
     if !is_owner {
         // Non-owner may only remove themselves
         if auth_user.id != target_user_id {
-            return Err(AppError::forbidden("only the project owner can remove other members"));
+            return Err(AppError::forbidden(
+                "only the project owner can remove other members",
+            ));
         }
         // Owner is not in the members table, but guard against the edge case anyway
         let is_target_owner = state
@@ -192,7 +194,9 @@ pub async fn remove_member(
             .await
             .map_err(|e| AppError::internal(e.to_string()))?;
         if is_target_owner {
-            return Err(AppError::bad_request("owner cannot leave; transfer ownership first"));
+            return Err(AppError::bad_request(
+                "owner cannot leave; transfer ownership first",
+            ));
         }
         // Confirm requester is a member (not just any user)
         let is_member = state
@@ -205,7 +209,9 @@ pub async fn remove_member(
         }
     } else if auth_user.id == target_user_id {
         // Owner trying to remove themselves
-        return Err(AppError::bad_request("owner cannot leave; transfer ownership first"));
+        return Err(AppError::bad_request(
+            "owner cannot leave; transfer ownership first",
+        ));
     }
 
     let removed = state

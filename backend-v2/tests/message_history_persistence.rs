@@ -204,7 +204,11 @@ async fn get_messages_returns_empty_for_new_session() {
     let user_id = uuid::Uuid::parse_str(me["id"].as_str().unwrap()).unwrap();
 
     // Create session directly in DB using correct signature
-    let session = state.repository.create_session(project_id, user_id).await.unwrap();
+    let session = state
+        .repository
+        .create_session(project_id, user_id)
+        .await
+        .unwrap();
 
     let messages = get_message_history(&app, session.id, &token).await;
     assert_eq!(
@@ -250,13 +254,21 @@ async fn get_messages_returns_persisted_messages_in_order() {
     let (_, me) = authed(&app, "GET", "/me", &token, None).await;
     let user_id = uuid::Uuid::parse_str(me["id"].as_str().unwrap()).unwrap();
 
-    let session = state.repository.create_session(project_id, user_id).await.unwrap();
+    let session = state
+        .repository
+        .create_session(project_id, user_id)
+        .await
+        .unwrap();
     {
         let msgs = vec![
             Message::new(Role::User).with_contents([Part::text("first")]),
             Message::new(Role::Assistant).with_contents([Part::text("second")]),
         ];
-        state.repository.append_messages(session.id, &msgs).await.unwrap();
+        state
+            .repository
+            .append_messages(session.id, &msgs)
+            .await
+            .unwrap();
     }
 
     let body = get_message_history(&app, session.id, &token).await;
@@ -308,13 +320,21 @@ async fn clear_messages_removes_persisted_messages() {
     let (_, me) = authed(&app, "GET", "/me", &token, None).await;
     let user_id = uuid::Uuid::parse_str(me["id"].as_str().unwrap()).unwrap();
 
-    let session = state.repository.create_session(project_id, user_id).await.unwrap();
+    let session = state
+        .repository
+        .create_session(project_id, user_id)
+        .await
+        .unwrap();
     {
         let msgs = vec![
             Message::new(Role::User).with_contents([Part::text("hello")]),
             Message::new(Role::Assistant).with_contents([Part::text("world")]),
         ];
-        state.repository.append_messages(session.id, &msgs).await.unwrap();
+        state
+            .repository
+            .append_messages(session.id, &msgs)
+            .await
+            .unwrap();
     }
 
     let before = get_message_history(&app, session.id, &token).await;
@@ -353,10 +373,18 @@ async fn clear_messages_does_not_delete_session() {
     let (_, me) = authed(&app, "GET", "/me", &token, None).await;
     let user_id = uuid::Uuid::parse_str(me["id"].as_str().unwrap()).unwrap();
 
-    let session = state.repository.create_session(project_id, user_id).await.unwrap();
+    let session = state
+        .repository
+        .create_session(project_id, user_id)
+        .await
+        .unwrap();
     {
         let msgs = vec![Message::new(Role::User).with_contents([Part::text("ping")])];
-        state.repository.append_messages(session.id, &msgs).await.unwrap();
+        state
+            .repository
+            .append_messages(session.id, &msgs)
+            .await
+            .unwrap();
     }
 
     clear_message_history(&app, session.id, &token).await;
@@ -389,17 +417,29 @@ async fn can_append_messages_after_clear() {
     let (_, me) = authed(&app, "GET", "/me", &token, None).await;
     let user_id = uuid::Uuid::parse_str(me["id"].as_str().unwrap()).unwrap();
 
-    let session = state.repository.create_session(project_id, user_id).await.unwrap();
+    let session = state
+        .repository
+        .create_session(project_id, user_id)
+        .await
+        .unwrap();
     {
         let msgs = vec![Message::new(Role::User).with_contents([Part::text("old")])];
-        state.repository.append_messages(session.id, &msgs).await.unwrap();
+        state
+            .repository
+            .append_messages(session.id, &msgs)
+            .await
+            .unwrap();
     }
 
     clear_message_history(&app, session.id, &token).await;
 
     {
         let msgs = vec![Message::new(Role::User).with_contents([Part::text("new")])];
-        state.repository.append_messages(session.id, &msgs).await.unwrap();
+        state
+            .repository
+            .append_messages(session.id, &msgs)
+            .await
+            .unwrap();
     }
 
     let body = get_message_history(&app, session.id, &token).await;

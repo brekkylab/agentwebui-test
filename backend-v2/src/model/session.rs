@@ -1,10 +1,10 @@
+use ailoy::message::MessageOutput;
 use chrono::{DateTime, Utc};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::repository::DbSession;
-
 pub use crate::repository::ShareMode;
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -44,3 +44,11 @@ impl From<DbSession> for SessionResponse {
 pub struct SessionListResponse {
     pub items: Vec<SessionResponse>,
 }
+
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct SendMessageRequest {
+    pub content: String,
+}
+
+pub type SendMessageResponse = Vec<MessageOutput>;

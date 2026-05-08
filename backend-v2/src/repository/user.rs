@@ -2,10 +2,8 @@ use chrono::{DateTime, Utc};
 use sqlx::Row;
 use uuid::Uuid;
 
-use crate::auth::Role;
-use crate::repository::RepositoryResult;
-
 use super::SqliteRepository;
+use crate::{auth::Role, repository::RepositoryResult};
 
 #[derive(Debug, Clone)]
 pub struct DbUser {
@@ -201,7 +199,9 @@ impl SqliteRepository {
         new_user: NewUser,
     ) -> RepositoryResult<(DbUser, crate::repository::DbProject)> {
         let user = self.create_user(new_user).await?;
-        let project = self.create_project("Personal".to_string(), None, user.id).await?;
+        let project = self
+            .create_project("Personal".to_string(), None, user.id)
+            .await?;
         Ok((user, project))
     }
 }

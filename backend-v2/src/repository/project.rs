@@ -2,9 +2,8 @@ use chrono::{DateTime, Utc};
 use sqlx::Row;
 use uuid::Uuid;
 
-use crate::repository::{RepositoryError, RepositoryResult};
-
 use super::SqliteRepository;
+use crate::repository::{RepositoryError, RepositoryResult};
 
 #[derive(Debug, Clone)]
 pub struct DbProject {
@@ -30,8 +29,14 @@ impl SqliteRepository {
             name: row.get("name"),
             description: row.get("description"),
             owner_id: Self::parse_uuid(row.get::<String, _>("owner_id"), "projects.owner_id")?,
-            created_at: Self::parse_timestamp(row.get::<String, _>("created_at"), "projects.created_at")?,
-            updated_at: Self::parse_timestamp(row.get::<String, _>("updated_at"), "projects.updated_at")?,
+            created_at: Self::parse_timestamp(
+                row.get::<String, _>("created_at"),
+                "projects.created_at",
+            )?,
+            updated_at: Self::parse_timestamp(
+                row.get::<String, _>("updated_at"),
+                "projects.updated_at",
+            )?,
         })
     }
 
@@ -107,19 +112,17 @@ impl SqliteRepository {
         let new_name = name.unwrap_or(current.name);
         let new_desc = description.unwrap_or(current.description);
 
-        sqlx::query(
-            "UPDATE projects SET name = ?, description = ?, updated_at = ? WHERE id = ?",
-        )
-        .bind(&new_name)
-        .bind(&new_desc)
-        .bind(&now)
-        .bind(id.to_string())
-        .execute(&self.pool)
-        .await?;
+        sqlx::query("UPDATE projects SET name = ?, description = ?, updated_at = ? WHERE id = ?")
+            .bind(&new_name)
+            .bind(&new_desc)
+            .bind(&now)
+            .bind(id.to_string())
+            .execute(&self.pool)
+            .await?;
 
-        self.get_project(id).await?.ok_or_else(|| {
-            RepositoryError::InvalidData("project disappeared after update".into())
-        })
+        self.get_project(id)
+            .await?
+            .ok_or_else(|| RepositoryError::InvalidData("project disappeared after update".into()))
     }
 
     pub async fn delete_project(&self, id: Uuid) -> RepositoryResult<bool> {
@@ -136,15 +139,13 @@ impl SqliteRepository {
         user_id: Uuid,
     ) -> RepositoryResult<()> {
         let now = Self::now_string();
-        sqlx::query(
-            "INSERT INTO project_members (project_id, user_id, added_at) VALUES (?, ?, ?)",
-        )
-        .bind(project_id.to_string())
-        .bind(user_id.to_string())
-        .bind(&now)
-        .execute(&self.pool)
-        .await
-        .map_err(|e| Self::map_db_error(e, "project_members.user_id"))?;
+        sqlx::query("INSERT INTO project_members (project_id, user_id, added_at) VALUES (?, ?, ?)")
+            .bind(project_id.to_string())
+            .bind(user_id.to_string())
+            .bind(&now)
+            .execute(&self.pool)
+            .await
+            .map_err(|e| Self::map_db_error(e, "project_members.user_id"))?;
         Ok(())
     }
 
@@ -153,13 +154,12 @@ impl SqliteRepository {
         project_id: Uuid,
         user_id: Uuid,
     ) -> RepositoryResult<bool> {
-        let result = sqlx::query(
-            "DELETE FROM project_members WHERE project_id = ? AND user_id = ?",
-        )
-        .bind(project_id.to_string())
-        .bind(user_id.to_string())
-        .execute(&self.pool)
-        .await?;
+        let result =
+            sqlx::query("DELETE FROM project_members WHERE project_id = ? AND user_id = ?")
+                .bind(project_id.to_string())
+                .bind(user_id.to_string())
+                .execute(&self.pool)
+                .await?;
         Ok(result.rows_affected() > 0)
     }
 
@@ -181,18 +181,15 @@ impl SqliteRepository {
 
         rows.into_iter()
             .map(|r| {
-                let added_at = Self::parse_timestamp(r.get::<String, _>("added_at"), "pm.added_at")?;
+                let added_at =
+                    Self::parse_timestamp(r.get::<String, _>("added_at"), "pm.added_at")?;
                 let user = Self::row_to_db_user(&r)?;
                 Ok((user, added_at))
             })
             .collect()
     }
 
-    pub async fn user_in_project(
-        &self,
-        user_id: Uuid,
-        project_id: Uuid,
-    ) -> RepositoryResult<bool> {
+    pub async fn user_in_project(&self, user_id: Uuid, project_id: Uuid) -> RepositoryResult<bool> {
         let row = sqlx::query(
             "SELECT 1 FROM projects WHERE id = ? AND owner_id = ?
              UNION ALL

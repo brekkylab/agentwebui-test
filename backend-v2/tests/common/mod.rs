@@ -159,7 +159,11 @@ pub async fn authed(
 
 pub async fn get_personal_project(app: &axum::Router, token: &str) -> serde_json::Value {
     let (status, body) = authed(app, "GET", "/projects", token, None).await;
-    assert_eq!(status, axum::http::StatusCode::OK, "list_projects failed: {body}");
+    assert_eq!(
+        status,
+        axum::http::StatusCode::OK,
+        "list_projects failed: {body}"
+    );
     body["items"]
         .as_array()
         .expect("items array")
@@ -169,11 +173,7 @@ pub async fn get_personal_project(app: &axum::Router, token: &str) -> serde_json
         .expect("Personal project not found")
 }
 
-pub async fn post_session_authed(
-    app: &axum::Router,
-    token: &str,
-    project_id: &str,
-) -> uuid::Uuid {
+pub async fn post_session_authed(app: &axum::Router, token: &str, project_id: &str) -> uuid::Uuid {
     let (status, body) = authed(
         app,
         "POST",
@@ -190,12 +190,7 @@ pub async fn post_session_authed(
     uuid::Uuid::parse_str(body["id"].as_str().unwrap()).unwrap()
 }
 
-pub async fn add_member(
-    app: &axum::Router,
-    owner_token: &str,
-    project_id: &str,
-    username: &str,
-) {
+pub async fn add_member(app: &axum::Router, owner_token: &str, project_id: &str, username: &str) {
     let (status, body) = authed(
         app,
         "POST",
@@ -358,14 +353,8 @@ pub async fn get_message_history(
     id: uuid::Uuid,
     token: &str,
 ) -> serde_json::Value {
-    let (status, value) = authed(
-        app,
-        "GET",
-        &format!("/sessions/{id}/messages"),
-        token,
-        None,
-    )
-    .await;
+    let (status, value) =
+        authed(app, "GET", &format!("/sessions/{id}/messages"), token, None).await;
     assert_eq!(
         status,
         axum::http::StatusCode::OK,
@@ -379,14 +368,7 @@ pub async fn get_message_history_status(
     id: uuid::Uuid,
     token: &str,
 ) -> axum::http::StatusCode {
-    let (status, _) = authed(
-        app,
-        "GET",
-        &format!("/sessions/{id}/messages"),
-        token,
-        None,
-    )
-    .await;
+    let (status, _) = authed(app, "GET", &format!("/sessions/{id}/messages"), token, None).await;
     status
 }
 

@@ -5,9 +5,8 @@ use serde::{Deserialize, Serialize};
 use sqlx::Row;
 use uuid::Uuid;
 
-use crate::repository::RepositoryResult;
-
 use super::SqliteRepository;
+use crate::repository::RepositoryResult;
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq)]
 #[serde(rename_all = "snake_case")]
@@ -56,17 +55,30 @@ pub struct DbSession {
 impl SqliteRepository {
     fn row_to_db_session(row: sqlx::sqlite::SqliteRow) -> RepositoryResult<DbSession> {
         let share_mode_str: String = row.get("share_mode");
-        let share_mode = ShareMode::from_str(&share_mode_str)
-            .ok_or_else(|| crate::repository::RepositoryError::InvalidData(
-                format!("invalid share_mode: {share_mode_str}"),
-            ))?;
+        let share_mode = ShareMode::from_str(&share_mode_str).ok_or_else(|| {
+            crate::repository::RepositoryError::InvalidData(format!(
+                "invalid share_mode: {share_mode_str}"
+            ))
+        })?;
         Ok(DbSession {
             id: Self::parse_uuid(row.get::<String, _>("id"), "sessions.id")?,
-            project_id: Self::parse_uuid(row.get::<String, _>("project_id"), "sessions.project_id")?,
-            creator_id: Self::parse_uuid(row.get::<String, _>("creator_id"), "sessions.creator_id")?,
+            project_id: Self::parse_uuid(
+                row.get::<String, _>("project_id"),
+                "sessions.project_id",
+            )?,
+            creator_id: Self::parse_uuid(
+                row.get::<String, _>("creator_id"),
+                "sessions.creator_id",
+            )?,
             share_mode,
-            created_at: Self::parse_timestamp(row.get::<String, _>("created_at"), "sessions.created_at")?,
-            updated_at: Self::parse_timestamp(row.get::<String, _>("updated_at"), "sessions.updated_at")?,
+            created_at: Self::parse_timestamp(
+                row.get::<String, _>("created_at"),
+                "sessions.created_at",
+            )?,
+            updated_at: Self::parse_timestamp(
+                row.get::<String, _>("updated_at"),
+                "sessions.updated_at",
+            )?,
         })
     }
 
@@ -185,9 +197,7 @@ impl SqliteRepository {
         .fetch_all(&self.pool)
         .await?;
 
-        rows.into_iter()
-            .map(Self::row_to_db_session)
-            .collect()
+        rows.into_iter().map(Self::row_to_db_session).collect()
     }
 
     pub async fn update_session_share_mode(
@@ -196,23 +206,23 @@ impl SqliteRepository {
         share_mode: &ShareMode,
     ) -> RepositoryResult<DbSession> {
         let now = Self::now_string();
-        let result = sqlx::query(
-            "UPDATE sessions SET share_mode = ?, updated_at = ? WHERE id = ?",
-        )
-        .bind(share_mode.as_str())
-        .bind(&now)
-        .bind(session_id.to_string())
-        .execute(&self.pool)
-        .await?;
+        let result = sqlx::query("UPDATE sessions SET share_mode = ?, updated_at = ? WHERE id = ?")
+            .bind(share_mode.as_str())
+            .bind(&now)
+            .bind(session_id.to_string())
+            .execute(&self.pool)
+            .await?;
 
         if result.rows_affected() == 0 {
-            return Err(crate::repository::RepositoryError::InvalidData(
-                format!("session {session_id} not found"),
-            ));
+            return Err(crate::repository::RepositoryError::InvalidData(format!(
+                "session {session_id} not found"
+            )));
         }
 
         self.get_session(session_id).await?.ok_or_else(|| {
-            crate::repository::RepositoryError::InvalidData("session disappeared after update".into())
+            crate::repository::RepositoryError::InvalidData(
+                "session disappeared after update".into(),
+            )
         })
     }
 
@@ -278,7 +288,8 @@ impl SqliteRepository {
         rows.iter()
             .map(|row| {
                 let json = row.get::<String, _>("message_json");
-                serde_json::from_str::<Message>(&json).map_err(crate::repository::RepositoryError::Serialization)
+                serde_json::from_str::<Message>(&json)
+                    .map_err(crate::repository::RepositoryError::Serialization)
             })
             .collect()
     }

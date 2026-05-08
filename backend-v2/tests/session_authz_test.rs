@@ -2,6 +2,7 @@
 mod common;
 
 use std::sync::Arc;
+
 use axum::http::StatusCode;
 
 // Helper: build an app and repo together so we can seed sessions via the repo.
@@ -48,7 +49,11 @@ async fn private_session_not_accessible_to_member() {
         None,
     )
     .await;
-    assert_eq!(status, StatusCode::OK, "alice should access her own private session");
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "alice should access her own private session"
+    );
 
     // bob (a member of the project) cannot access alice's private session → 404
     let (status, _) = common::authed(
@@ -59,7 +64,11 @@ async fn private_session_not_accessible_to_member() {
         None,
     )
     .await;
-    assert_eq!(status, StatusCode::NOT_FOUND, "bob should not see alice's private session");
+    assert_eq!(
+        status,
+        StatusCode::NOT_FOUND,
+        "bob should not see alice's private session"
+    );
 }
 
 // ── non_member_cannot_access_any_session ─────────────────────────────────────
@@ -82,9 +91,12 @@ async fn non_member_cannot_access_any_session() {
     // alice seeds a shared_chat session directly via repo, then changes share_mode via repo
     let session = repo.create_session(project_id, alice_id).await.unwrap();
     let session_id = session.id;
-    repo.update_session_share_mode(session_id, &agent_k_backend::repository::ShareMode::SharedChat)
-        .await
-        .unwrap();
+    repo.update_session_share_mode(
+        session_id,
+        &agent_k_backend::repository::ShareMode::SharedChat,
+    )
+    .await
+    .unwrap();
 
     // charlie (not a member) tries to GET the session → 404
     let (status, _) = common::authed(
@@ -95,7 +107,11 @@ async fn non_member_cannot_access_any_session() {
         None,
     )
     .await;
-    assert_eq!(status, StatusCode::NOT_FOUND, "non-member should not access any session");
+    assert_eq!(
+        status,
+        StatusCode::NOT_FOUND,
+        "non-member should not access any session"
+    );
 }
 
 // ── shared_readonly_allows_read_but_not_send ──────────────────────────────────
@@ -130,7 +146,11 @@ async fn shared_readonly_allows_read_but_not_send() {
         None,
     )
     .await;
-    assert_eq!(status, StatusCode::OK, "bob should be able to read shared_readonly session");
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "bob should be able to read shared_readonly session"
+    );
 
     // bob cannot POST a message → 403
     let (status, _) = common::authed(
@@ -141,7 +161,11 @@ async fn shared_readonly_allows_read_but_not_send() {
         Some(serde_json::json!({ "content": "hello" })),
     )
     .await;
-    assert_eq!(status, StatusCode::FORBIDDEN, "bob should not be able to send to shared_readonly session");
+    assert_eq!(
+        status,
+        StatusCode::FORBIDDEN,
+        "bob should not be able to send to shared_readonly session"
+    );
 }
 
 // ── only_creator_can_change_share_mode ───────────────────────────────────────
@@ -165,9 +189,12 @@ async fn only_creator_can_change_share_mode() {
     // alice creates a shared_chat session so bob can see it
     let session = repo.create_session(project_id, alice_id).await.unwrap();
     let session_id = session.id;
-    repo.update_session_share_mode(session_id, &agent_k_backend::repository::ShareMode::SharedChat)
-        .await
-        .unwrap();
+    repo.update_session_share_mode(
+        session_id,
+        &agent_k_backend::repository::ShareMode::SharedChat,
+    )
+    .await
+    .unwrap();
 
     // bob (chat member) tries to PATCH the session's share_mode → 403
     let (status, body) = common::authed(
@@ -178,7 +205,11 @@ async fn only_creator_can_change_share_mode() {
         Some(serde_json::json!({ "share_mode": "private" })),
     )
     .await;
-    assert_eq!(status, StatusCode::FORBIDDEN, "non-creator should not change share mode: {body}");
+    assert_eq!(
+        status,
+        StatusCode::FORBIDDEN,
+        "non-creator should not change share mode: {body}"
+    );
 
     // alice (creator) can change it → 200
     let (status, body) = common::authed(
@@ -189,7 +220,11 @@ async fn only_creator_can_change_share_mode() {
         Some(serde_json::json!({ "share_mode": "private" })),
     )
     .await;
-    assert_eq!(status, StatusCode::OK, "creator should be able to change share mode: {body}");
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "creator should be able to change share mode: {body}"
+    );
 }
 
 // ── private_session_not_in_project_list ──────────────────────────────────────
@@ -225,7 +260,11 @@ async fn private_session_not_in_project_list() {
     .await;
     assert_eq!(status, StatusCode::OK, "list sessions failed: {body}");
     let items = body["items"].as_array().expect("items array");
-    assert_eq!(items.len(), 0, "bob should not see alice's private session: {body}");
+    assert_eq!(
+        items.len(),
+        0,
+        "bob should not see alice's private session: {body}"
+    );
 
     // alice changes session to shared_readonly via HTTP
     common::update_share_mode(&app, &alice_token, session_id, "shared_readonly").await;
@@ -241,7 +280,11 @@ async fn private_session_not_in_project_list() {
     .await;
     assert_eq!(status, StatusCode::OK, "list sessions failed: {body}");
     let items = body["items"].as_array().expect("items array");
-    assert_eq!(items.len(), 1, "bob should now see the shared_readonly session: {body}");
+    assert_eq!(
+        items.len(),
+        1,
+        "bob should now see the shared_readonly session: {body}"
+    );
     assert_eq!(
         items[0]["id"].as_str().unwrap(),
         session_id.to_string(),

@@ -49,7 +49,6 @@ impl SqliteRepository {
         }
         RepositoryError::Database(e)
     }
-
 }
 
 #[cfg(test)]

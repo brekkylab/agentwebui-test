@@ -1,16 +1,15 @@
+mod project;
+mod session;
 mod sqlite;
 mod user;
-mod session;
-mod project;
-pub use user::{DbUser, NewUser, UpdateUser};
-pub use session::{DbSession, SessionAccess, ShareMode};
-pub use project::{DbProject, DbProjectMember};
-
 use std::{sync::Arc, time::Duration};
 
+pub use project::{DbProject, DbProjectMember};
+pub use session::{DbSession, SessionAccess, ShareMode};
 pub use sqlite::SqliteRepository;
 use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous};
 use thiserror::Error;
+pub use user::{DbUser, NewUser, UpdateUser};
 
 const DEFAULT_DB_PATH: &str = "sqlite://./data/agent-k.db";
 

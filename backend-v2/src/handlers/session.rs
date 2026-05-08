@@ -203,7 +203,9 @@ pub async fn update_session(
         .ok_or_else(|| AppError::not_found("session not found or access denied"))?;
 
     if !matches!(access, SessionAccess::Creator) {
-        return Err(AppError::forbidden("only the session creator can change sharing"));
+        return Err(AppError::forbidden(
+            "only the session creator can change sharing",
+        ));
     }
 
     let updated = state
@@ -229,7 +231,9 @@ pub async fn delete_session(
         .ok_or_else(|| AppError::not_found("session not found or access denied"))?;
 
     if !matches!(access, SessionAccess::Creator) {
-        return Err(AppError::forbidden("only the session creator can delete this session"));
+        return Err(AppError::forbidden(
+            "only the session creator can delete this session",
+        ));
     }
 
     state
@@ -290,17 +294,25 @@ pub async fn clear_message_history(
         .ok_or_else(|| AppError::not_found("session not found or access denied"))?;
 
     if !matches!(access, SessionAccess::Creator) {
-        return Err(AppError::forbidden("only the session creator can clear history"));
+        return Err(AppError::forbidden(
+            "only the session creator can clear history",
+        ));
     }
 
     // Acquire agent lock before clearing so concurrent sends can't re-persist old messages.
     if let Some(arc) = state.get_agent(&session_id) {
         let mut agent = arc.lock().await;
-        state.repository.clear_messages(session.id).await
+        state
+            .repository
+            .clear_messages(session.id)
+            .await
             .map_err(|e| AppError::internal(e.to_string()))?;
         agent.state.history.clear();
     } else {
-        state.repository.clear_messages(session.id).await
+        state
+            .repository
+            .clear_messages(session.id)
+            .await
             .map_err(|e| AppError::internal(e.to_string()))?;
     }
 

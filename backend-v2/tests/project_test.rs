@@ -17,7 +17,12 @@ async fn signup_creates_personal_project() {
     assert_eq!(status, StatusCode::OK, "list projects failed: {body}");
 
     let items = body["items"].as_array().expect("items array");
-    assert_eq!(items.len(), 1, "expected exactly 1 project, got: {}", items.len());
+    assert_eq!(
+        items.len(),
+        1,
+        "expected exactly 1 project, got: {}",
+        items.len()
+    );
     assert_eq!(items[0]["name"], "Personal");
 }
 
@@ -80,7 +85,11 @@ async fn owner_can_invite_and_remove_member() {
         None,
     )
     .await;
-    assert_eq!(status, StatusCode::OK, "bob should be able to access project");
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "bob should be able to access project"
+    );
 
     // bob tries to remove alice → 403 (non-owner cannot remove other members)
     let (status, body) = common::authed(
@@ -91,7 +100,11 @@ async fn owner_can_invite_and_remove_member() {
         None,
     )
     .await;
-    assert_eq!(status, StatusCode::FORBIDDEN, "bob should not be able to remove alice: {body}");
+    assert_eq!(
+        status,
+        StatusCode::FORBIDDEN,
+        "bob should not be able to remove alice: {body}"
+    );
 
     // alice removes bob → 204
     let (status, body) = common::authed(
@@ -102,7 +115,11 @@ async fn owner_can_invite_and_remove_member() {
         None,
     )
     .await;
-    assert_eq!(status, StatusCode::NO_CONTENT, "alice should be able to remove bob: {body}");
+    assert_eq!(
+        status,
+        StatusCode::NO_CONTENT,
+        "alice should be able to remove bob: {body}"
+    );
 
     // bob can no longer access project → 403
     let (status, _) = common::authed(
@@ -113,7 +130,11 @@ async fn owner_can_invite_and_remove_member() {
         None,
     )
     .await;
-    assert_eq!(status, StatusCode::FORBIDDEN, "bob should be forbidden after removal");
+    assert_eq!(
+        status,
+        StatusCode::FORBIDDEN,
+        "bob should be forbidden after removal"
+    );
 }
 
 // ── member_cannot_invite ──────────────────────────────────────────────────────
@@ -146,7 +167,11 @@ async fn member_cannot_invite() {
         Some(serde_json::json!({ "username": "charlie" })),
     )
     .await;
-    assert_eq!(status, StatusCode::FORBIDDEN, "member should not be able to invite: {body}");
+    assert_eq!(
+        status,
+        StatusCode::FORBIDDEN,
+        "member should not be able to invite: {body}"
+    );
 }
 
 // ── project_delete_cascades_sessions ─────────────────────────────────────────
@@ -187,7 +212,11 @@ async fn project_delete_cascades_sessions() {
         None,
     )
     .await;
-    assert_eq!(status, StatusCode::OK, "session should exist before project deletion");
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "session should exist before project deletion"
+    );
 
     // alice deletes the project → 204
     let (status, body) = common::authed(
@@ -198,7 +227,11 @@ async fn project_delete_cascades_sessions() {
         None,
     )
     .await;
-    assert_eq!(status, StatusCode::NO_CONTENT, "delete project failed: {body}");
+    assert_eq!(
+        status,
+        StatusCode::NO_CONTENT,
+        "delete project failed: {body}"
+    );
 
     // session should now return 404
     let (status, _) = common::authed(
@@ -209,7 +242,11 @@ async fn project_delete_cascades_sessions() {
         None,
     )
     .await;
-    assert_eq!(status, StatusCode::NOT_FOUND, "session should be gone after project deletion");
+    assert_eq!(
+        status,
+        StatusCode::NOT_FOUND,
+        "session should be gone after project deletion"
+    );
 }
 
 // ── owner_leave_is_blocked ────────────────────────────────────────────────────
@@ -235,5 +272,9 @@ async fn owner_leave_is_blocked() {
         None,
     )
     .await;
-    assert_eq!(status, StatusCode::BAD_REQUEST, "owner leave should be blocked: {body}");
+    assert_eq!(
+        status,
+        StatusCode::BAD_REQUEST,
+        "owner leave should be blocked: {body}"
+    );
 }
