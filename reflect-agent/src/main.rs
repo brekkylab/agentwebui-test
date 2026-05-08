@@ -8,11 +8,10 @@
 //! # Override model
 //! cargo run -p reflect-agent -- --model openai/gpt-4o-mini
 //!
-//! # Choose reflect mode (off | self | forced)
-//! cargo run -p reflect-agent -- --reflect-mode self  --query "..."
+//! # Choose reflect mode (off | forced)
 //! cargo run -p reflect-agent -- --reflect-mode forced --query "..."
 //!
-//! # Show both verify and reflect outputs (regardless of mode)
+//! # Show both verify and reflect outputs in forced mode
 //! cargo run -p reflect-agent -- --reflect-mode forced --verbose --query "..."
 //! ```
 
@@ -23,8 +22,8 @@ use ailoy::{
 use anyhow::Result;
 use clap::Parser;
 use reflect_agent::{
-    DEFAULT_MODEL, DEFAULT_REFLECT_MODEL, ReflectMode, VerifyConfig, VerifyReport,
-    build_agent_with_mode, register_provider_from_env, run_with_forced_reflect, run_with_hybrid,
+    DEFAULT_ESCALATE_MODEL, DEFAULT_MODEL, DEFAULT_REFLECT_MODEL, ReflectMode, VerifyConfig,
+    VerifyReport, build_agent_with_mode, register_provider_from_env, run_with_forced_reflect,
     run_with_verify,
 };
 use rustyline::{DefaultEditor, error::ReadlineError};
@@ -32,7 +31,7 @@ use rustyline::{DefaultEditor, error::ReadlineError};
 #[derive(Parser)]
 #[command(
     name = "reflect-agent",
-    about = "Single lead agent with bash + python + web_search tools, plus optional verify/reflect gates"
+    about = "Single lead agent with bash + python + web_search tools and a post-hoc verify gate"
 )]
 struct Cli {
     /// Language model id, e.g. `openai/gpt-4o-mini`,
@@ -44,17 +43,22 @@ struct Cli {
     #[arg(long)]
     query: Option<String>,
 
-    /// Reflect strategy: `off` (default), `self` (verify tool + system
-    /// prompt), or `forced` (wrapper-driven retry budget = 1).
+    /// Reflect strategy: `off` (default) or `forced` (Haiku reflect after
+    /// each turn, with low-confidence Stops escalating to a stronger model).
     #[arg(long, default_value = "off")]
     reflect_mode: String,
 
-    /// Model used for the reflect call in `self` and `forced` modes.
+    /// First-pass reflect model used in `forced` mode.
     #[arg(long, default_value = DEFAULT_REFLECT_MODEL)]
     reflect_model: String,
 
+    /// Stronger model invoked when the first-pass verdict's confidence
+    /// falls below the escalation threshold.
+    #[arg(long, default_value = DEFAULT_ESCALATE_MODEL)]
+    escalate_model: String,
+
     /// Always emit the verify report to stderr, even when reflect mode is
-    /// `self` or `forced`. Useful for comparing what each layer flags.
+    /// `forced`. Useful for comparing what each layer flags.
     #[arg(long)]
     verbose: bool,
 }
@@ -78,7 +82,15 @@ async fn main() -> Result<()> {
     let mut agent = build_agent_with_mode(&cli.model, mode).await?;
 
     if let Some(q) = cli.query {
-        run_query(&mut agent, &q, mode, &cli.reflect_model, cli.verbose).await?;
+        run_query(
+            &mut agent,
+            &q,
+            mode,
+            &cli.reflect_model,
+            &cli.escalate_model,
+            cli.verbose,
+        )
+        .await?;
         return Ok(());
     }
 
@@ -105,7 +117,16 @@ async fn main() -> Result<()> {
         if line == "/exit" {
             break;
         }
-        if let Err(e) = run_query(&mut agent, &line, mode, &cli.reflect_model, cli.verbose).await {
+        if let Err(e) = run_query(
+            &mut agent,
+            &line,
+            mode,
+            &cli.reflect_model,
+            &cli.escalate_model,
+            cli.verbose,
+        )
+        .await
+        {
             eprintln!("ERROR: {e}");
         }
     }
@@ -116,64 +137,50 @@ async fn main() -> Result<()> {
 
 /// Stream one user turn through the chosen reflect mode and print:
 ///
-/// - assistant text + tool-call markers on stdout (every mode);
+/// - assistant text + tool-call markers on stdout;
 /// - verify report on stderr — always in `off`, only with `--verbose` in
-///   the LLM-driven modes;
-/// - reflect verdicts on stderr — only when `forced` mode actually emits
-///   them (`self` mode's verdicts surface as tool results in the stdout
-///   stream, so they don't need a separate channel).
+///   `forced`;
+/// - reflect verdicts on stderr in `forced` (with the escalation count
+///   when at least one fired).
 async fn run_query(
     agent: &mut Agent,
     input: &str,
     mode: ReflectMode,
     reflect_model: &str,
+    escalate_model: &str,
     verbose: bool,
 ) -> Result<()> {
     let query = Message::new(Role::User).with_contents([Part::text(input)]);
     let verify_config = VerifyConfig::default();
 
     match mode {
-        ReflectMode::Off | ReflectMode::Self_ => {
-            // Both modes use the same outer driver. The difference is at
-            // build_agent_with_mode time (Self_ added the verify tool +
-            // system prompt). At run time we just stream and verify.
+        ReflectMode::Off => {
             let (outputs, report) = run_with_verify(agent, query, &verify_config).await?;
             print_assistant_stream(&outputs);
-            // Off: always show the verify report. Self_: only with --verbose.
-            let show_verify = matches!(mode, ReflectMode::Off) || verbose;
-            if show_verify {
-                print_verify_report(&report);
-            }
+            print_verify_report(&report);
         }
         ReflectMode::Forced => {
             let provider: AgentProvider = default_provider().await.clone();
-            let outcome =
-                run_with_forced_reflect(agent, query, &verify_config, &provider, reflect_model)
-                    .await?;
+            let outcome = run_with_forced_reflect(
+                agent,
+                query,
+                &verify_config,
+                &provider,
+                reflect_model,
+                escalate_model,
+            )
+            .await?;
             print_assistant_stream(&outcome.outputs);
-            // Reflect verdicts always print in forced mode (that's the point).
             print_reflect_verdicts(&outcome.reflect_verdicts, outcome.retry_count);
-            // Verify report only with --verbose to keep the comparison clean.
+            if outcome.escalations > 0 {
+                eprintln!(
+                    "       (escalated {} low-confidence stop(s) to {})",
+                    outcome.escalations, escalate_model
+                );
+            }
             if verbose {
                 print_verify_report(&outcome.verify_report);
             }
-        }
-        ReflectMode::Hybrid => {
-            let provider: AgentProvider = default_provider().await.clone();
-            let outcome =
-                run_with_hybrid(agent, query, &verify_config, &provider, reflect_model).await?;
-            print_assistant_stream(&outcome.outputs);
-            // Hybrid is the comparison mode, so its outputs always include
-            // both verdicts *and* the verifier's per-turn findings — that's
-            // the entire point of using this mode.
-            print_reflect_verdicts(&outcome.reflect_verdicts, outcome.retry_count);
-            if outcome.low_confidence_promotions > 0 {
-                eprintln!(
-                    "       (promoted {} low-confidence stop(s) into retries)",
-                    outcome.low_confidence_promotions
-                );
-            }
-            print_verify_report(&outcome.verify_report);
         }
     }
 

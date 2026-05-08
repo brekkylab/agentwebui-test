@@ -1,20 +1,16 @@
-//! LLM-driven reflect gate (Phase 2 of the reflect-agent design).
+//! LLM-driven reflect gate.
 //!
-//! Two modes are exposed:
+//! One mode is exposed: **`Forced`** — `Agent::run` is wrapped on the
+//! outside, and after each turn a Haiku reflect call examines the draft.
+//! When the draft's reported confidence falls below
+//! [`LOW_CONFIDENCE_THRESHOLD`], a stronger model (Sonnet by default)
+//! re-examines the same draft and the stronger verdict is final.
+//! Sonnet's `stop` is honoured; a Sonnet `retry` verdict is ignored
+//! because in our calibration data the retry path never recovered the
+//! answer.
 //!
-//! - **`Self_`** — the agent's `bash` / `python_repl` / `web_search` tool set
-//!   gains a fourth tool, `verify`, and the system prompt instructs the LLM
-//!   to call it before emitting the final answer. The LLM decides when to
-//!   invoke the verify pass; if it doesn't, the gate is bypassed.
-//!
-//! - **`Forced`** — `Agent::run` is wrapped on the outside. After the agent
-//!   finishes a turn, the wrapper unconditionally runs a separate LLM call
-//!   on the draft answer and gets a [`ReflectVerdict`] back. On `Retry`,
-//!   the wrapper re-invokes the agent with `next_query`. The retry budget
-//!   is fixed at one re-attempt per user turn.
-//!
-//! Both modes share [`reflect_call`] — the JSON-shaped LLM critique that
-//! emits a `stop` / `retry` verdict — and [`ReflectVerdict`] parsing.
+//! [`reflect_call`] performs the JSON-shaped LLM critique and
+//! [`ReflectVerdict`] is the parsed result.
 
 use ailoy::{
     agent::AgentProvider,
@@ -24,15 +20,27 @@ use ailoy::{
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 
-/// Default LLM used by the reflect call. Cheap enough that one extra call
-/// per turn is acceptable; same model family as the main agent so that the
-/// global provider already covers it.
+/// Default LLM used by the first-pass reflect call. Same family as the
+/// main agent so the global provider already covers it.
 pub const DEFAULT_REFLECT_MODEL: &str = "anthropic/claude-haiku-4-5-20251001";
 
-/// Maximum number of `Retry` verdicts honoured per user turn. The second
-/// `Retry` is silently coerced to `Stop`. Mirrors the budget the rest of
-/// the verify-gate work uses.
+/// Default stronger model used when the first-pass verdict's confidence
+/// falls below [`LOW_CONFIDENCE_THRESHOLD`]. Mirrors Trust-or-Escalate
+/// (ICLR 2025 Oral, Pacchiardi et al.): low-confidence cases route to a
+/// stronger judge.
+pub const DEFAULT_ESCALATE_MODEL: &str = "anthropic/claude-sonnet-4-6";
+
+/// Maximum number of `Retry` verdicts honoured per user turn from the
+/// first-pass reflect model. Set to 1 to mirror the budget used elsewhere
+/// in the verify-gate work. The escalation model's `Retry` verdict is
+/// always ignored — only its `Stop` verdicts are acted on.
 pub const RETRY_BUDGET: usize = 1;
+
+/// Threshold below which a low-confidence `Stop` triggers escalation to
+/// the stronger model. The choice of 0.7 follows the convention in the
+/// OpenAI agentic-governance cookbook and LangGraph's `GroundingConfig`
+/// default; it is not calibrated against this project's workload.
+pub const LOW_CONFIDENCE_THRESHOLD: f32 = 0.7;
 
 /// Which reflect strategy to apply to a turn.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -41,19 +49,15 @@ pub enum ReflectMode {
     /// from PR #53 still runs; this mode is what the CLI defaults to.
     #[default]
     Off,
-    /// `verify` tool registered on the agent + system prompt instructs the
-    /// LLM to call it before final emission. LLM-self-discipline driven.
-    Self_,
-    /// Wrapper around `Agent::run` that unconditionally runs [`reflect_call`]
-    /// on the draft answer after the turn finishes. Strict but blind to
-    /// what the deterministic verify pass already noticed.
+    /// Wrapper around `Agent::run` that runs [`reflect_call`] with Haiku
+    /// after the turn finishes. When the verdict is a low-confidence
+    /// `Stop` (confidence below [`LOW_CONFIDENCE_THRESHOLD`]), the
+    /// wrapper escalates to a stronger reflect model (Sonnet by default)
+    /// for a second look. The stronger model's `Stop` verdict is final.
+    /// A stronger-model `Retry` verdict is ignored — the calibration
+    /// data for this PR shows same-model retry never recovered the
+    /// answer in those cases.
     Forced,
-    /// Forced behaviour plus the deterministic verifier's findings get
-    /// passed into the reflect call as hints, and a low-confidence `Stop`
-    /// (below [`HYBRID_LOW_CONFIDENCE_THRESHOLD`]) is treated as a
-    /// retry within the standard budget. The two layers (deterministic
-    /// verify + LLM reflect) work together rather than in parallel.
-    Hybrid,
 }
 
 impl ReflectMode {
@@ -61,9 +65,7 @@ impl ReflectMode {
     pub fn as_str(self) -> &'static str {
         match self {
             ReflectMode::Off => "off",
-            ReflectMode::Self_ => "self",
             ReflectMode::Forced => "forced",
-            ReflectMode::Hybrid => "hybrid",
         }
     }
 
@@ -71,12 +73,8 @@ impl ReflectMode {
     pub fn parse(s: &str) -> Result<Self> {
         match s {
             "off" => Ok(ReflectMode::Off),
-            "self" => Ok(ReflectMode::Self_),
             "forced" => Ok(ReflectMode::Forced),
-            "hybrid" => Ok(ReflectMode::Hybrid),
-            other => anyhow::bail!(
-                "unknown reflect mode: {other:?} (expected off|self|forced|hybrid)"
-            ),
+            other => anyhow::bail!("unknown reflect mode: {other:?} (expected off|forced)"),
         }
     }
 }
@@ -85,11 +83,10 @@ impl ReflectMode {
 /// the user; `Retry` carries a re-posed query for the agent to run again.
 ///
 /// `confidence` is an `Option<f32>` in `[0.0, 1.0]`. The verifier LLM is
-/// asked to emit it but is allowed to omit it — older verdicts produced
-/// before the field was introduced still parse cleanly. Hybrid mode reads
-/// it to decide whether a `Stop` verdict is strong enough to honour;
-/// other modes treat low-confidence stops the same as high-confidence
-/// ones.
+/// asked to emit it but is allowed to omit it. Forced mode reads it to
+/// decide whether a `Stop` verdict is strong enough to honour or
+/// requires escalation to the stronger model; otherwise high- and
+/// low-confidence stops are treated the same.
 #[derive(Clone, Debug, PartialEq)]
 pub enum ReflectVerdict {
     Stop {
@@ -122,13 +119,6 @@ impl ReflectVerdict {
         }
     }
 }
-
-/// Threshold under which Hybrid mode treats a `Stop` verdict as "not
-/// confident enough" and forces a retry (within the standard retry
-/// budget). Picked at 0.7 to match the loose convention in Codex's
-/// `review_prompt.md` evaluator: low-confidence assessments shouldn't
-/// be allowed to silently end the turn. Other modes ignore this.
-pub const HYBRID_LOW_CONFIDENCE_THRESHOLD: f32 = 0.7;
 
 /// Wire-format expected from the reflect LLM. We keep the parsing tolerant —
 /// trailing prose, mixed casing, missing `next_query` on a `Stop`
@@ -165,11 +155,11 @@ that do not exist in the trajectory. Use a confidence below 0.7 only when \
 you genuinely cannot tell whether the draft is right. Output JSON only — \
 no prose around it.";
 
-/// Run one reflect call. The LLM sees the draft answer plus, optionally,
-/// a list of deterministic-verifier hints — typically the rendered
-/// findings from a [`crate::VerifyReport`] when called from Hybrid mode.
-/// Pass an empty slice in modes (Self / Forced) that don't have a verify
-/// pass paired with the call.
+/// Run one reflect call. The LLM sees the draft answer plus an optional
+/// list of deterministic-verifier hints — typically the rendered
+/// findings from a [`crate::VerifyReport`]. Forced mode passes an empty
+/// slice; the parameter is kept on the public surface so callers that
+/// want to layer hints on top can opt in.
 pub async fn reflect_call(
     provider: &AgentProvider,
     model_id: &str,
@@ -276,7 +266,7 @@ fn sanitize_confidence(c: Option<f32>) -> Option<f32> {
 
 fn fallback_stop(reason: &str) -> ReflectVerdict {
     // Fail-open verdicts have no claim to high confidence — leave it as
-    // None so Hybrid mode doesn't silently honour a synthetic stop.
+    // None so the escalation gate doesn't silently honour a synthetic stop.
     ReflectVerdict::Stop {
         rationale: reason.to_string(),
         confidence: None,
@@ -300,7 +290,7 @@ mod tests {
 
     #[test]
     fn mode_round_trip() {
-        for m in [ReflectMode::Off, ReflectMode::Self_, ReflectMode::Forced] {
+        for m in [ReflectMode::Off, ReflectMode::Forced] {
             assert_eq!(ReflectMode::parse(m.as_str()).unwrap(), m);
         }
     }
@@ -458,13 +448,13 @@ mod tests {
 
     #[test]
     fn fallback_stop_has_no_confidence() {
-        // Fail-open paths must not claim a confidence — Hybrid mode would
-        // otherwise treat synthetic verdicts as decisively as real ones.
+        // Fail-open paths must not claim a confidence — the escalation gate
+        // would otherwise treat synthetic verdicts as decisively as real ones.
         let v = parse_verdict("not json at all");
         assert_eq!(v.confidence(), None);
     }
 
-    // ── budget + threshold constants — referenced by run_with_*_reflect ───
+    // ── budget + threshold constants — referenced by run_with_forced_reflect ─
 
     #[test]
     fn retry_budget_is_one() {
@@ -474,17 +464,10 @@ mod tests {
     }
 
     #[test]
-    fn hybrid_threshold_is_seven_tenths() {
-        // Hybrid mode's "low confidence → retry" threshold. Loose convention
-        // from Codex's review_prompt.md evaluator. Change deliberately.
-        assert!((HYBRID_LOW_CONFIDENCE_THRESHOLD - 0.7).abs() < f32::EPSILON);
-    }
-
-    // ── ReflectMode coverage ──────────────────────────────────────────────
-
-    #[test]
-    fn hybrid_mode_round_trips() {
-        assert_eq!(ReflectMode::parse("hybrid").unwrap(), ReflectMode::Hybrid);
-        assert_eq!(ReflectMode::Hybrid.as_str(), "hybrid");
+    fn low_confidence_threshold_is_seven_tenths() {
+        // The escalation threshold. 0.7 follows the convention in OpenAI's
+        // agentic-governance cookbook and LangGraph's GroundingConfig
+        // default. Change deliberately.
+        assert!((LOW_CONFIDENCE_THRESHOLD - 0.7).abs() < f32::EPSILON);
     }
 }
