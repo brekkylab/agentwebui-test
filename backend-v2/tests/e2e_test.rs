@@ -6,8 +6,10 @@ use std::sync::Arc;
 use agent_k_backend::{repository, router::get_router, state::AppState};
 use aide::openapi::OpenApi;
 use ailoy::{agent::default_provider_mut, lang_model::LangModelProvider};
-use axum::body::Body;
-use axum::http::{Request, StatusCode};
+use axum::{
+    body::Body,
+    http::{Request, StatusCode},
+};
 use common::test_jwt_config;
 use http_body_util::BodyExt;
 use speedwagon::{Store, build_tools};
