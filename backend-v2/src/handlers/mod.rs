@@ -6,7 +6,6 @@ mod session;
 mod user;
 
 pub use auth::*;
-#[allow(unused_imports)]
 pub use dirent::*;
 pub use document::*;
 pub use project::*;

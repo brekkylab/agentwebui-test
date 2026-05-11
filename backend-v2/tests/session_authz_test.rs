@@ -1,7 +1,7 @@
 #[path = "common/mod.rs"]
 mod common;
 
-use std::{path::PathBuf, sync::Arc};
+use std::sync::Arc;
 
 use axum::http::StatusCode;
 
@@ -327,7 +327,11 @@ async fn removed_member_loses_session_access() {
         None,
     )
     .await;
-    assert_eq!(status, axum::http::StatusCode::NO_CONTENT, "remove member failed");
+    assert_eq!(
+        status,
+        axum::http::StatusCode::NO_CONTENT,
+        "remove member failed"
+    );
 
     // bob can no longer access his session after being removed
     let (status, _) = common::authed(

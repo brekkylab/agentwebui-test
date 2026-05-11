@@ -34,21 +34,25 @@ fn sandbox_name_for(id: &Uuid) -> String {
     format!("session-{}", &s[..12])
 }
 
-async fn build_sandbox(state: &Arc<AppState>, project_id: Uuid, session_id: Uuid) -> Result<Sandbox, String> {
-    let uploads_host = state.data_root
+async fn build_sandbox(
+    state: &Arc<AppState>,
+    project_id: Uuid,
+    session_id: Uuid,
+) -> Result<Sandbox, String> {
+    let uploads_host = state
+        .data_root
         .join("projects")
         .join(project_id.to_string())
         .join("uploads");
-    tokio::fs::create_dir_all(&uploads_host).await
+    tokio::fs::create_dir_all(&uploads_host)
+        .await
         .map_err(|e| format!("failed to create uploads dir: {e}"))?;
 
-    let volumes = vec![
-        VolumeMount::Bind {
-            host: uploads_host,
-            guest: "/workspace/.uploads".to_string(),
-            readonly: true,
-        },
-    ];
+    let volumes = vec![VolumeMount::Bind {
+        host: uploads_host,
+        guest: "/workspace/.uploads".to_string(),
+        readonly: true,
+    }];
 
     let sandbox_name = sandbox_name_for(&session_id);
     let cfg = SandboxConfig {
@@ -234,9 +238,7 @@ pub async fn update_session(
         .ok_or_else(|| AppError::not_found("session not found or access denied"))?;
 
     if !matches!(access, SessionAccess::Admin) {
-        return Err(AppError::forbidden(
-            "only admins can change sharing",
-        ));
+        return Err(AppError::forbidden("only admins can change sharing"));
     }
 
     let updated = state
@@ -270,9 +272,7 @@ pub async fn delete_session(
         .ok_or_else(|| AppError::not_found("session not found or access denied"))?;
 
     if !matches!(access, SessionAccess::Admin) {
-        return Err(AppError::forbidden(
-            "only admins can delete this session",
-        ));
+        return Err(AppError::forbidden("only admins can delete this session"));
     }
 
     state
@@ -325,9 +325,7 @@ pub async fn clear_message_history(
         .ok_or_else(|| AppError::not_found("session not found or access denied"))?;
 
     if !matches!(access, SessionAccess::Admin) {
-        return Err(AppError::forbidden(
-            "only admins can clear history",
-        ));
+        return Err(AppError::forbidden("only admins can clear history"));
     }
 
     // Acquire agent lock before clearing so concurrent sends can't re-persist old messages.

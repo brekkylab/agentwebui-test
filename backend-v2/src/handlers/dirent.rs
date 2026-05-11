@@ -15,7 +15,9 @@ use uuid::Uuid;
 use crate::{
     auth::AuthUser,
     error::{ApiResult, AppError},
-    model::{DirentEntry, DirentKind, FailedFile, ListQuery, ListResponse, UploadResponse, UploadedFile},
+    model::{
+        DirentEntry, DirentKind, FailedFile, ListQuery, ListResponse, UploadResponse, UploadedFile,
+    },
     state::AppState,
 };
 
@@ -91,7 +93,10 @@ pub async fn upload(
         let filename = match field.file_name() {
             Some(name) => name.to_string(),
             None => {
-                failed.push(FailedFile { path: String::new(), error: "missing filename".into() });
+                failed.push(FailedFile {
+                    path: String::new(),
+                    error: "missing filename".into(),
+                });
                 continue;
             }
         };
@@ -99,7 +104,10 @@ pub async fn upload(
         let host_path = match safe_join(&uploads_root, &filename) {
             Ok(p) => p,
             Err(e) => {
-                failed.push(FailedFile { path: filename, error: e });
+                failed.push(FailedFile {
+                    path: filename,
+                    error: e,
+                });
                 continue;
             }
         };
@@ -121,7 +129,9 @@ pub async fn upload(
             continue;
         }
 
-        let parent = host_path.parent().ok_or_else(|| AppError::internal("invalid path"))?;
+        let parent = host_path
+            .parent()
+            .ok_or_else(|| AppError::internal("invalid path"))?;
         tokio::fs::create_dir_all(parent)
             .await
             .map_err(|e| AppError::internal(format!("failed to create dirs: {e}")))?;
@@ -136,12 +146,19 @@ pub async fn upload(
             return Err(AppError::internal(format!("failed to finalize file: {e}")));
         }
 
-        succeeded.push(UploadedFile { path: filename, bytes: data.len() as u64 });
+        succeeded.push(UploadedFile {
+            path: filename,
+            bytes: data.len() as u64,
+        });
     }
 
     tracing::info!(project = %project_id, count = %succeeded.len(), "dirents uploaded");
 
-    Ok(Json(UploadResponse { project_id, succeeded, failed }))
+    Ok(Json(UploadResponse {
+        project_id,
+        succeeded,
+        failed,
+    }))
 }
 
 /// GET /projects/{project_id}/dirents
@@ -168,7 +185,10 @@ pub async fn list(
 
     match tokio::fs::metadata(&uploads_root).await {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            return Ok(Json(ListResponse { project_id, entries: vec![] }));
+            return Ok(Json(ListResponse {
+                project_id,
+                entries: vec![],
+            }));
         }
         Err(e) => return Err(AppError::internal(e.to_string())),
         Ok(_) => {}
@@ -181,14 +201,20 @@ pub async fn list(
     while let Some(dir) = queue.pop() {
         let mut read_dir = match tokio::fs::read_dir(&dir).await {
             Ok(rd) => rd,
-            Err(e) => { tracing::warn!(path = %dir.display(), "read_dir error: {e}"); continue; }
+            Err(e) => {
+                tracing::warn!(path = %dir.display(), "read_dir error: {e}");
+                continue;
+            }
         };
 
         loop {
             let entry = match read_dir.next_entry().await {
                 Ok(Some(e)) => e,
                 Ok(None) => break,
-                Err(e) => { tracing::warn!(path = %dir.display(), "readdir entry error: {e}"); break; }
+                Err(e) => {
+                    tracing::warn!(path = %dir.display(), "readdir entry error: {e}");
+                    break;
+                }
             };
             let entry_path = entry.path();
 
@@ -200,7 +226,10 @@ pub async fn list(
             // file_type() does not follow symlinks; skip symlinks to prevent escape
             let ftype = match entry.file_type().await {
                 Ok(ft) => ft,
-                Err(e) => { tracing::warn!(path = %entry_path.display(), "file_type error: {e}"); continue; }
+                Err(e) => {
+                    tracing::warn!(path = %entry_path.display(), "file_type error: {e}");
+                    continue;
+                }
             };
             if ftype.is_symlink() {
                 continue;
@@ -208,14 +237,22 @@ pub async fn list(
 
             let meta = match entry.metadata().await {
                 Ok(m) => m,
-                Err(e) => { tracing::warn!(path = %entry_path.display(), "metadata error: {e}"); continue; }
+                Err(e) => {
+                    tracing::warn!(path = %entry_path.display(), "metadata error: {e}");
+                    continue;
+                }
             };
 
             if ftype.is_dir() {
                 if recursive {
                     queue.push(entry_path);
                 }
-                if query.prefix.as_deref().map(|p| rel.starts_with(p)).unwrap_or(true) {
+                if query
+                    .prefix
+                    .as_deref()
+                    .map(|p| rel.starts_with(p))
+                    .unwrap_or(true)
+                {
                     entries.push(DirentEntry {
                         path: rel,
                         kind: DirentKind::Dir,
@@ -223,7 +260,12 @@ pub async fn list(
                         modified_at: None,
                     });
                 }
-            } else if query.prefix.as_deref().map(|p| rel.starts_with(p)).unwrap_or(true) {
+            } else if query
+                .prefix
+                .as_deref()
+                .map(|p| rel.starts_with(p))
+                .unwrap_or(true)
+            {
                 let modified_at = meta.modified().ok().map(DateTime::<Utc>::from);
                 entries.push(DirentEntry {
                     path: rel,
@@ -237,7 +279,10 @@ pub async fn list(
 
     entries.sort_by(|a, b| a.path.cmp(&b.path));
 
-    Ok(Json(ListResponse { project_id, entries }))
+    Ok(Json(ListResponse {
+        project_id,
+        entries,
+    }))
 }
 
 /// GET /projects/{project_id}/dirents/{*path}
@@ -282,7 +327,9 @@ pub async fn get_file(
         .await
         .map_err(|e| AppError::internal(format!("failed to read file: {e}")))?;
 
-    let content_type = mime_guess::from_path(&host_path).first_or_octet_stream().to_string();
+    let content_type = mime_guess::from_path(&host_path)
+        .first_or_octet_stream()
+        .to_string();
 
     Ok(axum::response::Response::builder()
         .header(axum::http::header::CONTENT_TYPE, content_type)

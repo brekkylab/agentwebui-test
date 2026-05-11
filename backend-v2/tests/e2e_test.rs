@@ -1,7 +1,7 @@
 #[path = "common/mod.rs"]
 mod common;
 
-use std::{path::PathBuf, sync::Arc};
+use std::sync::Arc;
 
 use agent_k_backend::{repository, router::get_router, state::AppState};
 use aide::openapi::OpenApi;

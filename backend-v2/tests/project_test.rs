@@ -1,7 +1,6 @@
 #[path = "common/mod.rs"]
 mod common;
 
-use std::path::PathBuf;
 use axum::http::StatusCode;
 
 // ── signup_creates_personal_project ──────────────────────────────────────────

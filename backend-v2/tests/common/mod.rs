@@ -1,7 +1,7 @@
 //! Shared test helpers for backend-v2 integration tests.
 #![allow(dead_code)]
 
-use std::{path::PathBuf, sync::Arc};
+use std::sync::Arc;
 
 use agent_k_backend::{auth::JwtConfig, repository, router, state::AppState};
 use aide::openapi::OpenApi;

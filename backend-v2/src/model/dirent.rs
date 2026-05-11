@@ -12,9 +12,9 @@ pub enum DirentKind {
 
 #[derive(Debug, Serialize, JsonSchema)]
 pub struct DirentEntry {
-    pub path: String,         // relative path from project uploads root
+    pub path: String, // relative path from project uploads root
     pub kind: DirentKind,
-    pub bytes: Option<u64>,   // None for directories
+    pub bytes: Option<u64>,                 // None for directories
     pub modified_at: Option<DateTime<Utc>>, // None if metadata unavailable
 }
 

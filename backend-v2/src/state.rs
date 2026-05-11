@@ -17,7 +17,12 @@ pub struct AppState {
 }
 
 impl AppState {
-    pub fn new(repository: AppRepository, store: SharedStore, jwt: JwtConfig, data_root: PathBuf) -> Self {
+    pub fn new(
+        repository: AppRepository,
+        store: SharedStore,
+        jwt: JwtConfig,
+        data_root: PathBuf,
+    ) -> Self {
         Self {
             agents: DashMap::new(),
             repository,

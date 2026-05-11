@@ -9,7 +9,7 @@
 #[path = "common/mod.rs"]
 mod common;
 
-use std::{path::PathBuf, sync::Arc};
+use std::sync::Arc;
 
 use agent_k_backend::{repository, state::AppState};
 use common::{
@@ -189,7 +189,8 @@ async fn unknown_session_returns_404() {
 async fn get_messages_returns_empty_for_new_session() {
     let store = make_test_store();
     let repo = make_repo().await;
-    let data_root = std::env::temp_dir().join(format!("agent-k-msg-persist-{}", uuid::Uuid::new_v4()));
+    let data_root =
+        std::env::temp_dir().join(format!("agent-k-msg-persist-{}", uuid::Uuid::new_v4()));
     let state = Arc::new(AppState::new(repo, store, test_jwt_config(), data_root));
     let app = make_app_with_state(state.clone());
 
@@ -243,7 +244,8 @@ async fn get_messages_returns_persisted_messages_in_order() {
 
     let store = make_test_store();
     let repo = make_repo().await;
-    let data_root = std::env::temp_dir().join(format!("agent-k-msg-persist-{}", uuid::Uuid::new_v4()));
+    let data_root =
+        std::env::temp_dir().join(format!("agent-k-msg-persist-{}", uuid::Uuid::new_v4()));
     let state = Arc::new(AppState::new(repo, store, test_jwt_config(), data_root));
     let app = make_app_with_state(state.clone());
 
@@ -310,7 +312,8 @@ async fn clear_messages_removes_persisted_messages() {
 
     let store = make_test_store();
     let repo = make_repo().await;
-    let data_root = std::env::temp_dir().join(format!("agent-k-msg-persist-{}", uuid::Uuid::new_v4()));
+    let data_root =
+        std::env::temp_dir().join(format!("agent-k-msg-persist-{}", uuid::Uuid::new_v4()));
     let state = Arc::new(AppState::new(repo, store, test_jwt_config(), data_root));
     let app = make_app_with_state(state.clone());
 
@@ -364,7 +367,8 @@ async fn clear_messages_does_not_delete_session() {
 
     let store = make_test_store();
     let repo = make_repo().await;
-    let data_root = std::env::temp_dir().join(format!("agent-k-msg-persist-{}", uuid::Uuid::new_v4()));
+    let data_root =
+        std::env::temp_dir().join(format!("agent-k-msg-persist-{}", uuid::Uuid::new_v4()));
     let state = Arc::new(AppState::new(repo, store, test_jwt_config(), data_root));
     let app = make_app_with_state(state.clone());
 
@@ -409,7 +413,8 @@ async fn can_append_messages_after_clear() {
 
     let store = make_test_store();
     let repo = make_repo().await;
-    let data_root = std::env::temp_dir().join(format!("agent-k-msg-persist-{}", uuid::Uuid::new_v4()));
+    let data_root =
+        std::env::temp_dir().join(format!("agent-k-msg-persist-{}", uuid::Uuid::new_v4()));
     let state = Arc::new(AppState::new(repo, store, test_jwt_config(), data_root));
     let app = make_app_with_state(state.clone());
 
