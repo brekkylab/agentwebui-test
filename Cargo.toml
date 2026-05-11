@@ -1,11 +1,12 @@
 [workspace]
 resolver = "3"
 members = [
-    "./backend",
-    "./chat-agent",
+    "backend-v2",
     "./docling-sys",
-    "./knowledge-agent",
+    "./reflect-agent",
+    "./speedwagon",
 ]
 
 [workspace.dependencies]
-ailoy = { git = "https://github.com/brekkylab/ailoy.git", rev = "224f612159e1261ca43c32cf13c293cd02f55ff4" }
+ailoy = { git = "https://github.com/brekkylab/ailoy.git", rev = "85de52a8d54359b73b9921129bd27cb68fc8bd2c", features = ["sandbox"] }
+speedwagon = { path = "./speedwagon", default-features = false }
