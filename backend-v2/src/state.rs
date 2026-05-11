@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{path::PathBuf, sync::Arc};
 
 use ailoy::agent::Agent;
 use dashmap::DashMap;
@@ -13,15 +13,17 @@ pub struct AppState {
     pub repository: AppRepository,
     pub store: SharedStore,
     pub jwt: JwtConfig,
+    pub data_root: PathBuf,
 }
 
 impl AppState {
-    pub fn new(repository: AppRepository, store: SharedStore, jwt: JwtConfig) -> Self {
+    pub fn new(repository: AppRepository, store: SharedStore, jwt: JwtConfig, data_root: PathBuf) -> Self {
         Self {
             agents: DashMap::new(),
             repository,
             store,
             jwt,
+            data_root,
         }
     }
 

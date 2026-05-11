@@ -1,0 +1,49 @@
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
+use uuid::Uuid;
+
+#[derive(Debug, Serialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum DirentKind {
+    File,
+    Dir,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct DirentEntry {
+    pub path: String,         // relative path from project uploads root
+    pub kind: DirentKind,
+    pub bytes: Option<u64>,   // None for directories
+    pub modified_at: Option<String>, // ISO 8601, None if metadata unavailable
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct UploadedFile {
+    pub path: String,
+    pub bytes: u64,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct FailedFile {
+    pub path: String,
+    pub error: String,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct UploadResponse {
+    pub project_id: Uuid,
+    pub succeeded: Vec<UploadedFile>,
+    pub failed: Vec<FailedFile>,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct ListResponse {
+    pub project_id: Uuid,
+    pub entries: Vec<DirentEntry>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct ListQuery {
+    pub prefix: Option<String>,
+    pub recursive: Option<bool>,
+}

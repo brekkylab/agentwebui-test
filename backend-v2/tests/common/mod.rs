@@ -1,7 +1,7 @@
 //! Shared test helpers for backend-v2 integration tests.
 #![allow(dead_code)]
 
-use std::sync::Arc;
+use std::{path::PathBuf, sync::Arc};
 
 use agent_k_backend::{auth::JwtConfig, repository, router, state::AppState};
 use aide::openapi::OpenApi;
@@ -55,7 +55,8 @@ pub fn make_test_store() -> speedwagon::SharedStore {
 
 pub fn make_app_with_repo(repo: repository::AppRepository) -> axum::Router {
     let store = make_test_store();
-    let state = Arc::new(AppState::new(repo, store, test_jwt_config()));
+    let data_root = std::env::temp_dir().join(format!("agent-k-test-{}", uuid::Uuid::new_v4()));
+    let state = Arc::new(AppState::new(repo, store, test_jwt_config(), data_root));
     make_app_with_state(state)
 }
 

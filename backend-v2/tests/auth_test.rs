@@ -1,6 +1,7 @@
 #[path = "common/mod.rs"]
 mod common;
 
+use std::path::PathBuf;
 use axum::http::StatusCode;
 
 // ── Signup ────────────────────────────────────────────────────────────────────
@@ -277,10 +278,12 @@ async fn setup_admin(_app: &axum::Router) -> (serde_json::Value, String) {
         .unwrap();
 
     let store = common::make_test_store();
+    let data_root = std::env::temp_dir().join(format!("agent-k-auth-{}", uuid::Uuid::new_v4()));
     let state = Arc::new(agent_k_backend::state::AppState::new(
         repo,
         store,
         jwt.clone(),
+        data_root,
     ));
     let app = common::make_app_with_state(state);
 
@@ -312,10 +315,12 @@ async fn admin_can_create_and_list_users() {
     .unwrap();
 
     let store = common::make_test_store();
+    let data_root = std::env::temp_dir().join(format!("agent-k-auth-{}", uuid::Uuid::new_v4()));
     let state = Arc::new(agent_k_backend::state::AppState::new(
         repo,
         store,
         common::test_jwt_config(),
+        data_root,
     ));
     let app = common::make_app_with_state(state);
 
@@ -359,10 +364,12 @@ async fn admin_can_update_user_role() {
     .unwrap();
 
     let store = common::make_test_store();
+    let data_root = std::env::temp_dir().join(format!("agent-k-auth-{}", uuid::Uuid::new_v4()));
     let state = Arc::new(agent_k_backend::state::AppState::new(
         repo,
         store,
         common::test_jwt_config(),
+        data_root,
     ));
     let app = common::make_app_with_state(state);
 
@@ -400,10 +407,12 @@ async fn admin_can_deactivate_user() {
     .unwrap();
 
     let store = common::make_test_store();
+    let data_root = std::env::temp_dir().join(format!("agent-k-auth-{}", uuid::Uuid::new_v4()));
     let state = Arc::new(agent_k_backend::state::AppState::new(
         repo,
         store,
         common::test_jwt_config(),
+        data_root,
     ));
     let app = common::make_app_with_state(state);
 
@@ -453,10 +462,12 @@ async fn admin_can_delete_user() {
     .unwrap();
 
     let store = common::make_test_store();
+    let data_root = std::env::temp_dir().join(format!("agent-k-auth-{}", uuid::Uuid::new_v4()));
     let state = Arc::new(agent_k_backend::state::AppState::new(
         repo,
         store,
         common::test_jwt_config(),
+        data_root,
     ));
     let app = common::make_app_with_state(state);
 
@@ -495,10 +506,12 @@ async fn admin_cannot_delete_self() {
         .unwrap();
 
     let store = common::make_test_store();
+    let data_root = std::env::temp_dir().join(format!("agent-k-auth-{}", uuid::Uuid::new_v4()));
     let state = Arc::new(agent_k_backend::state::AppState::new(
         repo,
         store,
         common::test_jwt_config(),
+        data_root,
     ));
     let app = common::make_app_with_state(state);
 
