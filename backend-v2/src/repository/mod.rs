@@ -1,14 +1,15 @@
+mod project;
+mod session;
 mod sqlite;
-
+mod user;
 use std::{sync::Arc, time::Duration};
 
-use chrono::{DateTime, Utc};
+pub use project::{DbProject, DbProjectMember};
+pub use session::{DbSession, SessionAccess, ShareMode};
 pub use sqlite::SqliteRepository;
 use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous};
 use thiserror::Error;
-use uuid::Uuid;
-
-use crate::auth::Role;
+pub use user::{DbUser, NewUser, UpdateUser};
 
 const DEFAULT_DB_PATH: &str = "sqlite://./data/agent-k.db";
 
@@ -34,41 +35,6 @@ pub enum RepositoryError {
 }
 
 pub type RepositoryResult<T> = Result<T, RepositoryError>;
-
-#[derive(Debug, Clone)]
-pub struct DbSession {
-    pub id: Uuid,
-    pub created_at: DateTime<Utc>,
-    pub updated_at: DateTime<Utc>,
-}
-
-#[derive(Debug, Clone)]
-pub struct DbUser {
-    pub id: Uuid,
-    pub username: String,
-    pub password_hash: String,
-    pub role: Role,
-    pub display_name: Option<String>,
-    pub is_active: bool,
-    pub created_at: DateTime<Utc>,
-    pub updated_at: DateTime<Utc>,
-}
-
-pub struct NewUser {
-    pub id: Uuid,
-    pub username: String,
-    pub password_hash: String,
-    pub role: Role,
-    pub display_name: Option<String>,
-    pub is_active: bool,
-}
-
-pub struct UpdateUser {
-    pub display_name: Option<String>,
-    pub password_hash: Option<String>,
-    pub role: Option<Role>,
-    pub is_active: Option<bool>,
-}
 
 pub type AppRepository = Arc<SqliteRepository>;
 
