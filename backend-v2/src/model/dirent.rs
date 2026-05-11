@@ -1,3 +1,4 @@
+use chrono::{DateTime, Utc};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -14,7 +15,7 @@ pub struct DirentEntry {
     pub path: String,         // relative path from project uploads root
     pub kind: DirentKind,
     pub bytes: Option<u64>,   // None for directories
-    pub modified_at: Option<String>, // ISO 8601, None if metadata unavailable
+    pub modified_at: Option<DateTime<Utc>>, // None if metadata unavailable
 }
 
 #[derive(Debug, Serialize, JsonSchema)]
@@ -43,6 +44,7 @@ pub struct ListResponse {
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct ListQuery {
     pub prefix: Option<String>,
     pub recursive: Option<bool>,
