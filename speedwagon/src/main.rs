@@ -14,17 +14,18 @@ use std::{
     sync::Arc,
 };
 
+use tokio::sync::RwLock;
+
 use ailoy::{
-    agent::{Agent, default_provider, default_provider_mut},
+    agent::{Agent, AgentProvider},
+    lang_model::LangModelProvider,
     message::{Message, Part, Role},
 };
 use anyhow::Result;
 use clap::Parser;
 use futures::StreamExt;
 use rustyline::{DefaultEditor, error::ReadlineError};
-use speedwagon::{
-    FileType, SpeedwagonSpec, Store, build_tool_provider, register_provider_from_env,
-};
+use speedwagon::{FileType, SharedStore, SpeedwagonSpec, Store, build_tools};
 
 use speedwagon::preset::{PresetKind, setup_docset};
 
@@ -54,14 +55,12 @@ fn resolve_dir(path: &str) -> PathBuf {
     }
 }
 
-async fn build_agent(store_dir: &Path, model: &str) -> Result<Agent> {
-    let store = Arc::new(Store::new(store_dir)?);
+async fn build_agent(store_dir: &Path, model: &str, provider: &AgentProvider) -> Result<Agent> {
+    let store: SharedStore = Arc::new(RwLock::new(Store::new(store_dir)?));
+
     let spec = SpeedwagonSpec::new().model(model).into_spec();
-    // Clone the global provider, then override its tool registry with the
-    // store-bound speedwagon tools. ailoy no longer accepts a separate
-    // ToolSet argument — tool sources live on AgentProvider.tools.
-    let mut provider = default_provider().await.clone();
-    provider.tools = build_tool_provider(store);
+    let mut provider = provider.clone();
+    provider.tools = build_tools(store);
     Agent::try_with_provider(spec, &provider).await
 }
 
@@ -114,17 +113,25 @@ async fn main() -> Result<()> {
         }
     };
 
-    // Populate ailoy's process-global provider once at boot. Every
-    // `Agent::try_new`/`try_with_provider` (including speedwagon's title/purpose/
-    // description helpers) reads from this singleton.
-    register_provider_from_env(&mut *default_provider_mut().await);
-
     if let Some(ref preset) = cli.preset {
         let mut store = Store::new(&store_dir)?;
         setup_docset(&mut store, preset).await?;
     }
 
-    let mut agent = build_agent(&store_dir, &cli.model).await?;
+    let mut provider = AgentProvider::new();
+    let mut model_provider = LangModelProvider::new();
+    if let Ok(key) = std::env::var("OPENAI_API_KEY") {
+        model_provider.insert("openai/*".into(), LangModelProvider::openai(key));
+    }
+    if let Ok(key) = std::env::var("ANTHROPIC_API_KEY") {
+        model_provider.insert("anthropic/*".into(), LangModelProvider::anthropic(key));
+    }
+    if let Ok(key) = std::env::var("GEMINI_API_KEY") {
+        model_provider.insert("google/*".into(), LangModelProvider::gemini(key));
+    }
+    provider.models = model_provider;
+
+    let mut agent = build_agent(&store_dir, &cli.model, &provider).await?;
     let doc_count = Store::new(&store_dir)?.count();
 
     println!();
@@ -154,7 +161,7 @@ async fn main() -> Result<()> {
         if input == "/exit" {
             break;
         } else if input == "/clear" {
-            agent = build_agent(&store_dir, &cli.model).await?;
+            agent = build_agent(&store_dir, &cli.model, &provider).await?;
             println!("Conversation cleared.");
         } else if input == "/list" {
             let store = Store::new(&store_dir)?;
@@ -191,7 +198,7 @@ async fn main() -> Result<()> {
             let mut write_store = Store::new(&store_dir)?;
             let id = write_store.ingest(bytes, filetype).await?;
             drop(write_store);
-            agent = build_agent(&store_dir, &cli.model).await?;
+            agent = build_agent(&store_dir, &cli.model, &provider).await?;
             println!("Ingested (id: {id})  —  agent rebuilt.");
         } else if let Some(id_str) = input.strip_prefix("/purge ") {
             let id_str = id_str.trim();
@@ -217,7 +224,7 @@ async fn main() -> Result<()> {
             match write_store.purge(id)? {
                 Some(doc) => {
                     drop(write_store);
-                    agent = build_agent(&store_dir, &cli.model).await?;
+                    agent = build_agent(&store_dir, &cli.model, &provider).await?;
                     println!("Purged '{}' — agent rebuilt.", doc.title);
                 }
                 None => eprintln!("Document not found: {id}"),
