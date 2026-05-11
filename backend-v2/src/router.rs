@@ -63,6 +63,14 @@ pub fn get_router(state: Arc<AppState>) -> ApiRouter {
             "/projects/{project_id}/sessions",
             get(handlers::list_sessions).post(handlers::create_session),
         )
+        .api_route(
+            "/projects/{project_id}/dirents",
+            post(handlers::upload).get(handlers::list),
+        )
+        .route(
+            "/projects/{project_id}/dirents/{*path}",
+            axum::routing::get(handlers::get_file).delete(handlers::delete_path),
+        )
         .layer(axum::middleware::from_fn_with_state(
             state.clone(),
             auth_required,
