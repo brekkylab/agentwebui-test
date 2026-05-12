@@ -4,32 +4,27 @@ mod common;
 use std::sync::Arc;
 
 use axum::http::StatusCode;
-use tempfile::TempDir;
 
 // Helper: build an app and repo together so we can seed sessions via the repo.
-async fn make_app_and_repo() -> (
-    axum::Router,
-    agent_k_backend::repository::AppRepository,
-    TempDir,
-) {
-    let tmp = TempDir::new().unwrap();
+async fn make_app_and_repo() -> (axum::Router, agent_k_backend::repository::AppRepository) {
     let repo = common::make_repo().await;
     let store = common::make_test_store();
+    let data_root = std::env::temp_dir().join(format!("agent-k-authz-{}", uuid::Uuid::new_v4()));
     let state = Arc::new(agent_k_backend::state::AppState::new(
         repo.clone(),
         store,
         common::test_jwt_config(),
-        tmp.path().to_path_buf(),
+        data_root,
     ));
     let app = common::make_app_with_state(state);
-    (app, repo, tmp)
+    (app, repo)
 }
 
 // ── private_session_not_accessible_to_member ─────────────────────────────────
 
 #[tokio::test]
 async fn private_session_not_accessible_to_member() {
-    let (app, repo, _tmp) = make_app_and_repo().await;
+    let (app, repo) = make_app_and_repo().await;
 
     // alice signs up, bob signs up; bob joins alice's project
     let alice_info = common::signup(&app, "alice", "password123").await;
@@ -82,7 +77,7 @@ async fn private_session_not_accessible_to_member() {
 
 #[tokio::test]
 async fn non_member_cannot_access_any_session() {
-    let (app, repo, _tmp) = make_app_and_repo().await;
+    let (app, repo) = make_app_and_repo().await;
 
     // alice signs up; charlie is NOT a member of alice's project
     let alice_info = common::signup(&app, "alice", "password123").await;
@@ -125,7 +120,7 @@ async fn non_member_cannot_access_any_session() {
 
 #[tokio::test]
 async fn shared_readonly_allows_read_but_not_send() {
-    let (app, repo, _tmp) = make_app_and_repo().await;
+    let (app, repo) = make_app_and_repo().await;
 
     // alice signs up; bob joins alice's project
     let alice_info = common::signup(&app, "alice", "password123").await;
@@ -179,7 +174,7 @@ async fn shared_readonly_allows_read_but_not_send() {
 
 #[tokio::test]
 async fn only_creator_can_change_share_mode() {
-    let (app, repo, _tmp) = make_app_and_repo().await;
+    let (app, repo) = make_app_and_repo().await;
 
     // alice signs up; bob joins alice's project
     let alice_info = common::signup(&app, "alice", "password123").await;
@@ -238,7 +233,7 @@ async fn only_creator_can_change_share_mode() {
 
 #[tokio::test]
 async fn owner_can_access_member_private_session() {
-    let (app, repo, _tmp) = make_app_and_repo().await;
+    let (app, repo) = make_app_and_repo().await;
 
     let alice_info = common::signup(&app, "alice", "password123").await;
     let alice_token = common::login(&app, "alice", "password123").await;
@@ -290,7 +285,7 @@ async fn owner_can_access_member_private_session() {
 
 #[tokio::test]
 async fn removed_member_loses_session_access() {
-    let (app, repo, _tmp) = make_app_and_repo().await;
+    let (app, repo) = make_app_and_repo().await;
 
     let alice_info = common::signup(&app, "alice", "password123").await;
     let alice_token = common::login(&app, "alice", "password123").await;
@@ -358,7 +353,7 @@ async fn removed_member_loses_session_access() {
 
 #[tokio::test]
 async fn owner_sees_all_sessions_in_project_list() {
-    let (app, repo, _tmp) = make_app_and_repo().await;
+    let (app, repo) = make_app_and_repo().await;
 
     let alice_info = common::signup(&app, "alice", "password123").await;
     let alice_token = common::login(&app, "alice", "password123").await;
@@ -397,7 +392,7 @@ async fn owner_sees_all_sessions_in_project_list() {
 
 #[tokio::test]
 async fn private_session_not_in_project_list() {
-    let (app, repo, _tmp) = make_app_and_repo().await;
+    let (app, repo) = make_app_and_repo().await;
 
     // alice signs up; bob joins alice's project
     let alice_info = common::signup(&app, "alice", "password123").await;
