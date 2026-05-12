@@ -52,6 +52,10 @@ pub fn safe_join(root: &Path, rel: &str) -> Result<PathBuf, String> {
 }
 
 fn has_path_prefix(rel: &str, prefix: &str) -> bool {
+    let prefix = prefix.trim_end_matches('/');
+    if prefix.is_empty() {
+        return true;
+    }
     rel == prefix || rel.starts_with(&format!("{prefix}/"))
 }
 
