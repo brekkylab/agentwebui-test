@@ -14,7 +14,7 @@ use aide::{
     openapi::{Info, OpenApi},
     scalar::Scalar,
 };
-use ailoy::{agent::default_provider_mut, lang_model::LangModelProvider};
+use ailoy::agent::default_provider_mut;
 use axum::{Extension, response::IntoResponse};
 use clap::Parser;
 use tokio::sync::RwLock;
