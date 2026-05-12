@@ -14,6 +14,7 @@ pub struct AppState {
     pub store: SharedStore,
     pub jwt: JwtConfig,
     pub data_root: PathBuf,
+    pub max_upload_bytes: usize,
 }
 
 impl AppState {
@@ -23,12 +24,17 @@ impl AppState {
         jwt: JwtConfig,
         data_root: PathBuf,
     ) -> Self {
+        let max_upload_bytes = std::env::var("AGENT_K_MAX_UPLOAD_BYTES")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(50 * 1024 * 1024);
         Self {
             agents: DashMap::new(),
             repository,
             store,
             jwt,
             data_root,
+            max_upload_bytes,
         }
     }
 
