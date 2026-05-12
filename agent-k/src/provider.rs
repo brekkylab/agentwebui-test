@@ -1,5 +1,5 @@
 //! Single registration site for ailoy [`LangModelProvider`] entries from
-//! environment variables. main.rs and integration tests both call
+//! environment variables. Binaries and integration tests both call
 //! [`register_provider_from_env`] so the env-key → glob-pattern mapping
 //! lives in exactly one place — preserving PR #49's invariant that helper
 //! modules never read env directly.

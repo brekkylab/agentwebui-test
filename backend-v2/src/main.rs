@@ -2,6 +2,12 @@ mod cli;
 
 use std::{path::PathBuf, sync::Arc};
 
+use agent_k::{
+    agents::{
+        get_calculate_tool_func, get_find_in_document_tool_func, get_search_document_tool_func,
+    },
+    knowledge_base::Store,
+};
 use agent_k_backend::{auth, repository, router, state::AppState};
 use aide::{
     axum::ApiRouter,
@@ -11,7 +17,6 @@ use aide::{
 use ailoy::{agent::default_provider_mut, lang_model::LangModelProvider};
 use axum::{Extension, response::IntoResponse};
 use clap::Parser;
-use speedwagon::{Store, build_tools};
 use tokio::sync::RwLock;
 use tower_http::cors::{Any, CorsLayer};
 
@@ -92,7 +97,7 @@ async fn run_server() -> std::io::Result<()> {
     ));
 
     {
-        let mut provider = default_provider_mut().await;
+        let mut provider = default_provider_mut();
 
         if let Ok(key) = std::env::var("OPENAI_API_KEY") {
             provider
@@ -110,7 +115,17 @@ async fn run_server() -> std::io::Result<()> {
                 .insert("google/*".into(), LangModelProvider::gemini(key));
         }
 
-        provider.tools = build_tools(store.clone());
+        provider
+            .tools
+            .insert_func("calculate", get_calculate_tool_func());
+        provider.tools.insert_func(
+            "search_document",
+            get_search_document_tool_func(store.clone()),
+        );
+        provider.tools.insert_func(
+            "find_in_document",
+            get_find_in_document_tool_func(store.clone()),
+        );
     }
 
     let app_state = Arc::new(AppState::new(repo, store, jwt));
