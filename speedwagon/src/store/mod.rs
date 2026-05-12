@@ -143,7 +143,7 @@ impl Store {
                     if !origin_path.exists() {
                         fs::write(&origin_path, &bytes)?;
                     }
-                    translator::translate(filetype, &origin_path, &corpus_path)?;
+                    translator::translate(filetype, &origin_path, &corpus_path).await?;
                 }
             }
         }
@@ -208,7 +208,9 @@ impl Store {
                             }
                             new_origin = Some(origin_path.clone());
                         }
-                        translator::translate(filetype.clone(), &origin_path, &corpus_path).map_err(|e| e.to_string())
+                        translator::translate(filetype.clone(), &origin_path, &corpus_path)
+                            .await
+                            .map_err(|e| e.to_string())
                     }
                 };
 

@@ -6908,6 +6908,7 @@ dependencies = [
  "chrono",
  "clap",
  "dirs 6.0.0",
+ "docling-sys",
  "dotenvy",
  "futures",
  "globset",
