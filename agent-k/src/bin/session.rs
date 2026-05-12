@@ -8,12 +8,9 @@
 
 use std::io::{self, BufRead, IsTerminal, Read, Write};
 
-use agent_k::{
-    agents::{get_gpt_minerva_agent, run_gpt_router_agent},
-    register_provider_from_env,
-};
+use agent_k::agents::{get_gpt_minerva_agent, run_gpt_router_agent};
 use ailoy::{
-    agent::{Agent, default_provider_mut},
+    agent::Agent,
     message::{Message, Part, Role},
 };
 use futures::StreamExt;
@@ -32,7 +29,6 @@ enum Session {
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     dotenvy::dotenv().ok();
-    register_provider_from_env(&mut default_provider_mut());
 
     clean_artifact_dir();
 

@@ -98,23 +98,6 @@ async fn run_server() -> std::io::Result<()> {
 
     {
         let mut provider = default_provider_mut();
-
-        if let Ok(key) = std::env::var("OPENAI_API_KEY") {
-            provider
-                .models
-                .insert("openai/*".into(), LangModelProvider::openai(key));
-        }
-        if let Ok(key) = std::env::var("ANTHROPIC_API_KEY") {
-            provider
-                .models
-                .insert("anthropic/*".into(), LangModelProvider::anthropic(key));
-        }
-        if let Ok(key) = std::env::var("GEMINI_API_KEY") {
-            provider
-                .models
-                .insert("google/*".into(), LangModelProvider::gemini(key));
-        }
-
         provider
             .tools
             .insert_func("calculate", get_calculate_tool_func());
