@@ -354,7 +354,7 @@ pub async fn get_file(
             .custom_flags(libc::O_NOFOLLOW)
             .open(&path)?;
         if file.metadata()?.is_dir() {
-            return Err(std::io::Error::other("is_directory"));
+            return Err(std::io::Error::from(std::io::ErrorKind::IsADirectory));
         }
         let mut buf = Vec::new();
         file.read_to_end(&mut buf)?;
@@ -371,7 +371,7 @@ pub async fn get_file(
         Err(e) if e.raw_os_error() == Some(libc::ELOOP) => {
             return Err(AppError::not_found("file not found"));
         }
-        Err(e) if e.to_string() == "is_directory" => {
+        Err(e) if e.kind() == std::io::ErrorKind::IsADirectory => {
             return Err(AppError::bad_request("path is a directory"));
         }
         Err(e) => return Err(AppError::internal(e.to_string())),
