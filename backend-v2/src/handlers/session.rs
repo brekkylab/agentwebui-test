@@ -64,7 +64,7 @@ async fn build_sandbox(
     Sandbox::new(cfg).await.map_err(|e| e.to_string())
 }
 
-async fn build_agent(sandbox: Sandbox, _project_id: Uuid) -> Result<Agent, String> {
+async fn build_agent(sandbox: Sandbox) -> Result<Agent, String> {
     let sw_card = AgentCard {
         name: "speedwagon".into(),
         description: "Search the knowledge base for answers. \
@@ -121,7 +121,7 @@ async fn resolve_agent_for(
         .await
         .map_err(|e| AppError::internal(e))?;
 
-    let mut agent = build_agent(sandbox, project_id)
+    let mut agent = build_agent(sandbox)
         .await
         .map_err(|e| AppError::internal(e))?;
 
@@ -167,7 +167,7 @@ pub async fn create_session(
             return Err(AppError::internal(e));
         }
     };
-    let agent = match build_agent(sandbox, project_id).await {
+    let agent = match build_agent(sandbox).await {
         Ok(a) => a,
         Err(e) => {
             let _ = ailoy::runenv::remove_persisted(&sandbox_name).await;

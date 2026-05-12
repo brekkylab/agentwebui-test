@@ -51,6 +51,10 @@ pub fn safe_join(root: &Path, rel: &str) -> Result<PathBuf, String> {
     Ok(root.join(normalized))
 }
 
+fn has_path_prefix(rel: &str, prefix: &str) -> bool {
+    rel == prefix || rel.starts_with(&format!("{prefix}/"))
+}
+
 /// POST /projects/{project_id}/dirents
 pub async fn upload(
     State(state): State<Arc<AppState>>,
@@ -286,7 +290,7 @@ pub async fn list(
                 if query
                     .prefix
                     .as_deref()
-                    .map(|p| rel.starts_with(p))
+                    .map(|p| has_path_prefix(&rel, p))
                     .unwrap_or(true)
                 {
                     entries.push(Dirent {
@@ -299,7 +303,7 @@ pub async fn list(
             } else if query
                 .prefix
                 .as_deref()
-                .map(|p| rel.starts_with(p))
+                .map(|p| has_path_prefix(&rel, p))
                 .unwrap_or(true)
             {
                 let modified_at = meta.modified().ok().map(DateTime::<Utc>::from);

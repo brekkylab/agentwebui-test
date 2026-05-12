@@ -4,6 +4,7 @@ use aide::axum::{
     ApiRouter,
     routing::{delete, get, post},
 };
+use axum::handler::Handler;
 
 use crate::{
     auth::{admin_required, auth_required},
@@ -65,10 +66,9 @@ pub fn get_router(state: Arc<AppState>) -> ApiRouter {
         )
         .api_route(
             "/projects/{project_id}/dirents",
-            post(handlers::upload)
-                .get(handlers::list)
-                // Override Axum's 2 MB default; actual per-file limit enforced in handler
-                .layer(axum::extract::DefaultBodyLimit::disable()),
+            // Body limit disabled only for upload; GET list has no body.
+            post(handlers::upload.layer(axum::extract::DefaultBodyLimit::disable()))
+                .get(handlers::list),
         )
         .api_route(
             "/projects/{project_id}/dirents/{*path}",
