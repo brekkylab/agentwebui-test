@@ -682,10 +682,7 @@ async fn last_admin_cannot_be_demoted_by_another_admin() {
     let admin2_id = {
         let (_, list) = common::authed(&app, "GET", "/admin/users", &admin2_token, None).await;
         let users = list["items"].as_array().unwrap();
-        users
-            .iter()
-            .find(|u| u["username"] == "admin2")
-            .unwrap()["id"]
+        users.iter().find(|u| u["username"] == "admin2").unwrap()["id"]
             .as_str()
             .unwrap()
             .to_string()

@@ -15,9 +15,10 @@ use uuid::Uuid;
 // in tests that inject agents but never actually run them.
 fn ensure_test_provider() {
     let mut provider = default_provider_mut();
-    provider
-        .models
-        .insert("openai/*".into(), LangModelProvider::openai("fake-key-for-test".into()));
+    provider.models.insert(
+        "openai/*".into(),
+        LangModelProvider::openai("fake-key-for-test".into()),
+    );
 }
 
 // ── helpers ───────────────────────────────────────────────────────────────────
@@ -25,7 +26,11 @@ fn ensure_test_provider() {
 async fn make_app_repo_state() -> (axum::Router, AppRepository, Arc<AppState>) {
     let repo = common::make_repo().await;
     let store = common::make_test_store();
-    let state = Arc::new(AppState::new(repo.clone(), store, common::test_jwt_config()));
+    let state = Arc::new(AppState::new(
+        repo.clone(),
+        store,
+        common::test_jwt_config(),
+    ));
     let app = common::make_app_with_state(state.clone());
     (app, repo, state)
 }
@@ -48,7 +53,11 @@ async fn fork_not_found() {
         None,
     )
     .await;
-    assert_eq!(status, StatusCode::NOT_FOUND, "fork of nonexistent session should be 404");
+    assert_eq!(
+        status,
+        StatusCode::NOT_FOUND,
+        "fork of nonexistent session should be 404"
+    );
 }
 
 // ── fork_no_access ────────────────────────────────────────────────────────────
@@ -77,7 +86,11 @@ async fn fork_no_access() {
         None,
     )
     .await;
-    assert_eq!(status, StatusCode::NOT_FOUND, "non-member fork should return 404");
+    assert_eq!(
+        status,
+        StatusCode::NOT_FOUND,
+        "non-member fork should return 404"
+    );
 }
 
 // ── fork_busy ────────────────────────────────────────────────────────────────
@@ -118,7 +131,11 @@ async fn fork_busy() {
         None,
     )
     .await;
-    assert_eq!(status, StatusCode::LOCKED, "fork while agent is busy should return 423");
+    assert_eq!(
+        status,
+        StatusCode::LOCKED,
+        "fork while agent is busy should return 423"
+    );
 }
 
 // ── fork_copies_messages ──────────────────────────────────────────────────────
@@ -159,11 +176,19 @@ async fn fork_copies_messages() {
         None,
     )
     .await;
-    assert_eq!(status, StatusCode::CREATED, "fork should return 201: {body}");
+    assert_eq!(
+        status,
+        StatusCode::CREATED,
+        "fork should return 201: {body}"
+    );
 
     let fork_id = Uuid::parse_str(body["id"].as_str().unwrap()).unwrap();
     assert_ne!(fork_id, session_a.id, "fork must get a new id");
-    assert_eq!(body["share_mode"].as_str().unwrap(), "private", "fork must be private");
+    assert_eq!(
+        body["share_mode"].as_str().unwrap(),
+        "private",
+        "fork must be private"
+    );
     assert_eq!(
         body["creator_id"].as_str().unwrap(),
         alice_id.to_string(),
@@ -222,7 +247,11 @@ async fn fork_chat_member_can_fork() {
         None,
     )
     .await;
-    assert_eq!(status, StatusCode::CREATED, "chat member must be able to fork: {body}");
+    assert_eq!(
+        status,
+        StatusCode::CREATED,
+        "chat member must be able to fork: {body}"
+    );
 }
 
 // ── fork_readonly_member_can_fork ─────────────────────────────────────────────
@@ -262,5 +291,9 @@ async fn fork_readonly_member_can_fork() {
         None,
     )
     .await;
-    assert_eq!(status, StatusCode::CREATED, "readonly member must be able to fork: {body}");
+    assert_eq!(
+        status,
+        StatusCode::CREATED,
+        "readonly member must be able to fork: {body}"
+    );
 }
