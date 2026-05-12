@@ -122,7 +122,13 @@ pub async fn upload(
                     if data.len() > max_bytes {
                         over_limit = true;
                         // Drain the rest so the multipart stream stays parseable.
-                        while field.chunk().await.ok().flatten().is_some() {}
+                        loop {
+                            match field.chunk().await {
+                                Ok(Some(_)) => {}
+                                Ok(None) => break,
+                                Err(_) => break,
+                            }
+                        }
                         break;
                     }
                 }
@@ -137,12 +143,23 @@ pub async fn upload(
             continue;
         }
 
-        let parent = host_path
-            .parent()
-            .ok_or_else(|| AppError::internal("invalid path"))?;
-        tokio::fs::create_dir_all(parent)
-            .await
-            .map_err(|e| AppError::internal(format!("failed to create dirs: {e}")))?;
+        let parent = match host_path.parent() {
+            Some(p) => p,
+            None => {
+                failed.push(FailedFile {
+                    path: filename,
+                    error: "invalid path".into(),
+                });
+                continue;
+            }
+        };
+        if let Err(e) = tokio::fs::create_dir_all(parent).await {
+            failed.push(FailedFile {
+                path: filename,
+                error: format!("failed to create dirs: {e}"),
+            });
+            continue;
+        }
 
         // Atomic write: temp in uploads_root for guaranteed same-fs rename.
         let tmp_path = uploads_root.join(format!(".tmp.{}", Uuid::new_v4().simple()));
@@ -155,7 +172,9 @@ pub async fn upload(
         }
         let byte_count = data.len() as u64;
         if let Err(e) = tokio::fs::rename(&tmp_path, &host_path).await {
-            let _ = tokio::fs::remove_file(&tmp_path).await;
+            if let Err(e) = tokio::fs::remove_file(&tmp_path).await {
+                tracing::warn!(path = %tmp_path.display(), "failed to remove orphaned temp file: {e}");
+            }
             failed.push(FailedFile {
                 path: filename,
                 error: format!("failed to finalize file: {e}"),
