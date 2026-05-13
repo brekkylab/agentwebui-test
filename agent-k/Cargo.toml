@@ -15,7 +15,9 @@ internal = ["dep:knowledge-base-examples"]
 
 [dependencies]
 ailoy = { workspace = true }
-anyhow = "1"
+anyhow = "1.0.100"
+chrono = { version = "0.4", features = ["serde"] }
+docling-sys = { path = "../docling-sys" }
 dirs = "6"
 dotenvy = "0.15"
 futures = "0.3"
