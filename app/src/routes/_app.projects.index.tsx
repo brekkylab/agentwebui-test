@@ -73,7 +73,7 @@ function ProjectCard({ project, isActive, onOpen }: { project: Project; isActive
         </span>
         <span className={`cw-role-badge ${isOwner ? 'owner' : 'member'}`}>{isOwner ? 'Owner' : 'Member'}</span>
       </div>
-      <p className="cw-project-card-desc">{project.description || 'backend-v2 project'}</p>
+      <p className="cw-project-card-desc">{project.description || '설명 없음'}</p>
       <div className="cw-project-card-footer">
         <AvatarStack users={memberUsers} />
         <span className="cw-card-stats">{sessions.data?.length ?? 0}개 세션 · {latest}</span>

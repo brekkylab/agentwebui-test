@@ -4,21 +4,20 @@
 import type { FileAsset, Message, Project, Session, User } from '@/domain/types';
 import type { AiloyMessage, AiloyPart, BackendDirent, BackendMember, BackendProject, BackendSession, BackendUser } from './backend-types';
 
-const MEMBER_COLOR_TOKENS = [
-  'var(--cw-member-olive)',
-  'var(--cw-member-milo)',
-  'var(--cw-member-owen)',
+const USER_COLOR_TOKENS = [
   'var(--cw-cozy-clay)',
+  'var(--cw-cozy-honey)',
+  'var(--cw-cozy-mustard)',
+  'var(--cw-cozy-sage)',
   'var(--cw-cozy-teal)',
   'var(--cw-cozy-plum)',
-  'var(--cw-cozy-honey)',
-  'var(--cw-cozy-sage)',
+  'var(--cw-cozy-rose)',
 ];
 
 function deterministicColor(seed: string): string {
   let hash = 0;
   for (let i = 0; i < seed.length; i += 1) hash = (hash * 31 + seed.charCodeAt(i)) >>> 0;
-  return MEMBER_COLOR_TOKENS[hash % MEMBER_COLOR_TOKENS.length]!;
+  return USER_COLOR_TOKENS[hash % USER_COLOR_TOKENS.length]!;
 }
 
 function initials(name: string): string {
@@ -34,7 +33,6 @@ export function toUser(backend: BackendUser): User {
   return {
     id: backend.id,
     name,
-    email: `${backend.username}@backend-v2`,
     roleLabel: backend.role === 'admin' ? 'Admin' : 'Member',
     avatar: initials(name),
     color: deterministicColor(backend.id),
@@ -46,7 +44,6 @@ export function toMemberUser(member: BackendMember): User {
   return {
     id: member.user_id,
     name,
-    email: `${member.username}@backend-v2`,
     roleLabel: 'Member',
     avatar: initials(name),
     color: deterministicColor(member.user_id),
@@ -56,7 +53,6 @@ export function toMemberUser(member: BackendMember): User {
 export const AI_USER: User = {
   id: 'ai',
   name: 'Cowork',
-  email: 'agent',
   roleLabel: 'Agent',
   avatar: 'CW',
   color: 'var(--cw-ink)',
@@ -80,7 +76,6 @@ export function toSession(backend: BackendSession): Session {
     creatorId: backend.creator_id,
     shareMode: backend.share_mode,
     intent: 'general',
-    model: 'backend-v2',
     updatedAt: compactDate(backend.updated_at),
     references: [],
   };
@@ -134,10 +129,8 @@ export function toFileAsset(entry: BackendDirent, projectId: string, projectName
     path: `${projectName}/${entry.path}`,
     type: entry.kind === 'dir' ? 'folder' : inferFileType(entry.path),
     sizeLabel: entry.kind === 'dir' ? 'folder' : formatBytes(entry.bytes ?? 0),
-    updatedAt: entry.modified_at ? compactDate(entry.modified_at) : 'backend-v2',
-    summary: entry.kind === 'dir'
-      ? 'Backend folder.'
-      : 'File from backend-v2 dirents.',
+    updatedAt: entry.modified_at ? compactDate(entry.modified_at) : '—',
+    summary: '',
     groundTruth: entry.kind === 'dir'
       ? ['Persisted directory']
       : ['Persisted file in backend storage'],

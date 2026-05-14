@@ -167,11 +167,11 @@ function FilesPage() {
           )}
           <div className="cw-dropzone" onClick={openUpload} role="button" tabIndex={0}>
             <IconPocket tone="add" icon="plus" />
-            <span>Drop files here or click Upload. Uploaded files are stored through backend-v2 dirents and become selectable ground truth.</span>
+            <span>파일을 드래그하거나 Upload를 누르세요. 업로드된 파일은 세션에서 ground truth로 선택할 수 있습니다.</span>
           </div>
           <div className="cw-knowledge">
             <h2><IconPocket tone="content" icon="sparkles" /> Knowledge <small>soon</small></h2>
-            <p>backend-v2의 index/summary metadata API가 추가되면 이 카드에서 selected files를 세션의 ground truth로 pin할 수 있습니다.</p>
+            <p>인덱싱과 요약 기능이 추가되면, 선택한 파일을 세션의 ground truth로 pin할 수 있습니다.</p>
           </div>
         </section>
       </div>

@@ -54,11 +54,6 @@
   --cw-cozy-plum:    oklch(0.55 0.075 340);   /* muted plum */
   --cw-cozy-rose:    oklch(0.62 0.090 18);    /* dusty rose */
 
-  /* Member colors (avatars only — never used as fills elsewhere) */
-  --cw-member-olive: oklch(0.62 0.13 45);
-  --cw-member-milo:  oklch(0.58 0.10 220);
-  --cw-member-owen:  oklch(0.55 0.10 145);
-
   /* Semantic icon tints (Lucide stroke + soft pocket bg) */
   --cw-icon-private:    var(--cw-cozy-clay);
   --cw-icon-readonly:   var(--cw-cozy-teal);

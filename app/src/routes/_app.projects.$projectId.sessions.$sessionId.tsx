@@ -111,7 +111,7 @@ function SessionPage() {
   const sess = session.data;
   const userList = members.data ?? [];
   const creator = userList.find((u) => u.id === sess?.creatorId);
-  const aiUser = { id: 'ai', name: 'Cowork', email: 'agent', roleLabel: 'Agent', avatar: 'CW', color: 'var(--cw-ink)' };
+  const aiUser = { id: 'ai', name: 'Cowork', roleLabel: 'Agent', avatar: 'CW', color: 'var(--cw-ink)' };
 
   return (
     <div className="cw-session-layout cw-page-enter">
@@ -162,7 +162,7 @@ function SessionPage() {
           <button
             type="button"
             className="cw-btn-secondary cw-artifact-button"
-            onClick={() => showToast('Artifacts API는 backend-v2에 추가되면 활성화됩니다.')}
+            onClick={() => showToast('Artifacts 기능은 곧 추가됩니다.')}
             disabled={streaming}
           >
             <IconPocket tone="trust" icon="artifact" compact /> Artifact
@@ -202,7 +202,7 @@ function MessageBubble({
   currentUserId,
 }: {
   message: Message;
-  users: Array<{ id: string; name: string; color: string; avatar: string; email: string; roleLabel: string }>;
+  users: Array<{ id: string; name: string; color: string; avatar: string; roleLabel: string }>;
   currentUserId: string;
 }) {
   const isAi = message.senderId === 'ai';

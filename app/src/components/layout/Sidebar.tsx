@@ -121,7 +121,7 @@ export function Sidebar() {
 
       {activeProject && (
         <div className="cw-project-block">
-          <SectionLabel>{activeProject.name}</SectionLabel>
+          <div className="cw-project-name">{activeProject.name}</div>
           <button
             className={`cw-nav-row ${activeRoute === 'project' ? 'is-active' : ''}`}
             onClick={() => openProject(activeProject.id)}
@@ -214,9 +214,8 @@ export function Sidebar() {
       {currentUser && (
         <div className="cw-sidebar-user">
           <Avatar user={currentUser} />
-          <div>
+          <div className="cw-sidebar-user-meta">
             <b>{currentUser.name.split(' ')[0]}</b>
-            <span>{currentUser.email}</span>
           </div>
           <button
             aria-label="logout"

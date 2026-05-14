@@ -13,9 +13,9 @@ function SettingsPage() {
 
   return (
     <section className="cw-page cw-simple-page cw-page-enter">
-      <SectionLabel>API boundary</SectionLabel>
+      <SectionLabel>Project metadata</SectionLabel>
       <h1>Settings</h1>
-      <p>현재 런타임은 backend-v2 live adapter입니다. backend가 제공하는 metadata만 표시합니다.</p>
+      <p>프로젝트 메타데이터입니다. 편집 기능은 곧 추가됩니다.</p>
       <div className="cw-simple-stack">
         <code>name: {project.data?.name ?? '—'}</code>
         <code>description: {project.data?.description || '—'}</code>

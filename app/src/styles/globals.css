@@ -37,8 +37,9 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
 .cw-session-row.is-active::before { content: ""; position: absolute; left: -13px; width: 2px; height: 14px; background: var(--cw-fg-1); border-radius: 1px; }
 .auto-dot { margin-left: auto; color: var(--cw-accent); font-size: 10px; }
 .cw-sidebar-user { margin-top: auto; border-top: 1px solid var(--cw-border); padding: 10px 6px 2px; display: grid; grid-template-columns: auto 1fr auto; gap: 9px; align-items: center; color: var(--cw-fg-2); }
-.cw-sidebar-user b { display: block; font-size: 13px; color: var(--cw-fg-1); }
-.cw-sidebar-user span { display: block; font-family: var(--cw-font-mono); font-size: 10px; color: var(--cw-fg-3); }
+.cw-sidebar-user-meta { min-width: 0; }
+.cw-sidebar-user-meta b { display: block; font-size: 13px; color: var(--cw-fg-1); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cw-sidebar-user-meta span { display: block; font-family: var(--cw-font-mono); font-size: 10px; color: var(--cw-fg-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 .cw-page { width: min(1084px, calc(100% - 80px)); margin: 0 auto; padding: 36px 0 72px; }
 .cw-page-enter { animation: cw-enter .26s ease both; }
@@ -656,7 +657,7 @@ button:disabled { cursor: not-allowed; opacity: .48; transform: none !important;
   padding: 28px;
   background:
     radial-gradient(circle at 22% 18%, color-mix(in oklch, var(--cw-accent), transparent 70%), transparent 30%),
-    radial-gradient(circle at 82% 72%, color-mix(in oklch, var(--cw-member-milo), transparent 70%), transparent 34%),
+    radial-gradient(circle at 82% 72%, color-mix(in oklch, var(--cw-cozy-teal), transparent 70%), transparent 34%),
     linear-gradient(135deg, var(--cw-surface), var(--cw-canvas));
 }
 

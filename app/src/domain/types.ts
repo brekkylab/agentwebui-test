@@ -8,7 +8,6 @@ export type RouteKey = 'projects' | 'project' | 'session' | 'files' | 'skills' |
 export interface User {
   id: UserId;
   name: string;
-  email: string;
   roleLabel: string;
   avatar: string;
   color: string;
@@ -29,7 +28,6 @@ export interface Session {
   creatorId: UserId;
   shareMode: ShareMode;
   intent: SessionIntent;
-  model: string;
   updatedAt: string;
   references: FileAsset['id'][];
   artifactId?: string;

@@ -5,7 +5,6 @@ import { getToken } from '@/api/client';
 import { getMe } from '@/api/auth';
 import { useAuthStore } from '@/stores/auth';
 import { Sidebar } from '@/components/layout/Sidebar';
-import { LiveBanner } from '@/components/layout/LiveBanner';
 
 export const Route = createFileRoute('/_app')({
   beforeLoad: () => {
@@ -30,7 +29,6 @@ function AppShell() {
     <div className="cw-app-shell">
       <Sidebar />
       <main className="cw-main-shell">
-        <LiveBanner />
         <Outlet />
       </main>
     </div>

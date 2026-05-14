@@ -69,7 +69,7 @@ export function InviteDialog({ projectId, onClose }: InviteDialogProps) {
             <input
               value={username}
               onChange={(e) => { setUsername(e.target.value); setError(null); }}
-              placeholder="예: milo"
+              placeholder="username"
               autoFocus
               disabled={pending}
               autoComplete="off"

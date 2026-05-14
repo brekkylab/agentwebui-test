@@ -11,10 +11,10 @@ function SchedulePage() {
     <section className="cw-page cw-simple-page cw-page-enter">
       <SectionLabel>Recurring runs</SectionLabel>
       <h1>Schedule</h1>
-      <p>cron + run-now + worker delivery. backend-v2에 worker/notification 인프라가 없어 비활성화 상태입니다.</p>
+      <p>주기 실행과 알림 배달을 한곳에서 관리합니다.</p>
       <EmptyState
-        title="Schedule API 준비 중"
-        body="backend-v2에 cron/run-now 엔드포인트와 worker queue가 추가되면 이 화면을 활성화합니다."
+        title="Schedule 준비 중"
+        body="스케줄 기능은 곧 추가됩니다."
         chip={<Icon name="calendar" size={16} />}
       />
     </section>

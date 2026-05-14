@@ -59,7 +59,7 @@ function LoginPage() {
         <p style={{ color: 'var(--cw-ink-3)', marginTop: 0 }}>
           {isSignup
             ? '새 계정을 만듭니다. 가입 후 personal project가 자동으로 생성됩니다.'
-            : 'backend-v2 라이브 모드로 로그인합니다.'}
+            : '로그인하여 시작하세요.'}
         </p>
 
         <div role="tablist" aria-label="auth mode" style={{

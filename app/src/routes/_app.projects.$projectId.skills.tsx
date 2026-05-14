@@ -11,10 +11,10 @@ function SkillsPage() {
     <section className="cw-page cw-simple-page cw-page-enter">
       <SectionLabel>Reusable prompts & tools</SectionLabel>
       <h1>Skills</h1>
-      <p>재사용 가능한 prompt template + tool binding. backend-v2에 아직 skills CRUD/run 엔드포인트가 없어 비활성화 상태입니다.</p>
+      <p>재사용 가능한 프롬프트 템플릿과 도구 바인딩을 한곳에서 관리합니다.</p>
       <EmptyState
-        title="Skills API 준비 중"
-        body="backend-v2에 skills CRUD/run 엔드포인트가 추가되면 이 화면이 활성화됩니다."
+        title="Skills 준비 중"
+        body="Skills 기능은 곧 추가됩니다."
         chip={<Icon name="zap" size={16} />}
       />
     </section>

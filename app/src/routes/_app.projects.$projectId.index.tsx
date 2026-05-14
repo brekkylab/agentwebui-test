@@ -75,7 +75,7 @@ function ProjectHome() {
       <div className="cw-project-hero">
         <div>
           <h1>{project.data?.name ?? '...'}</h1>
-          <p>{project.data?.description || 'backend-v2 project. 세션을 시작해 ailoy agent와 대화하세요.'}</p>
+          <p>{project.data?.description || '세션을 시작해 에이전트와 대화하세요.'}</p>
         </div>
         <div className="cw-hero-actions">
           <AvatarStack users={memberList} />
@@ -128,8 +128,8 @@ function ProjectHome() {
 
       <SectionLabel>Activity</SectionLabel>
       <div className="cw-activity-list">
-        <ActivityRow title="backend-v2 연결됨" date="방금 전">
-          이 프로젝트의 sessions/files는 backend-v2 상태와 동기화되어 표시됩니다.
+        <ActivityRow title="프로젝트 동기화됨" date="방금 전">
+          세션과 파일이 실시간으로 동기화되어 표시됩니다.
         </ActivityRow>
       </div>
 
@@ -172,7 +172,7 @@ function SessionCard({
         </span>
       </div>
       <p className="cw-session-last">
-        <span className="who">backend:</span> backend-v2 세션 · ailoy 에이전트가 응답합니다.
+        에이전트와 대화를 시작하세요.
       </p>
       <div className="cw-session-card-footer">
         <span className="cw-card-time">{compactTime(session.updatedAt)}</span>

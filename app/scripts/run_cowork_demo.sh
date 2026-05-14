@@ -101,7 +101,7 @@ SEED_ARGS=(--db "$DB" --data-root "$DATA_ROOT")
 if [[ "$NO_RESET" == "1" ]]; then
   SEED_ARGS+=(--no-reset)
 fi
-python3 "$ROOT/backend-v2/scripts/seed_cowork_demo.py" "${SEED_ARGS[@]}"
+python3 "$ROOT/app/scripts/seed_cowork_demo.py" "${SEED_ARGS[@]}"
 
 echo
 echo "==> Starting backend-v2 on $BACKEND_URL"

@@ -69,7 +69,7 @@ function MembersPage() {
     ?? (proj && currentUser?.id === proj.ownerId ? currentUser : null);
 
   const ownerRow: User | null = owner ?? (proj
-    ? { id: proj.ownerId, name: '(owner)', email: '—', roleLabel: 'Owner', avatar: 'OW', color: 'var(--cw-ink)' }
+    ? { id: proj.ownerId, name: '(owner)', roleLabel: 'Owner', avatar: 'OW', color: 'var(--cw-ink)' }
     : null);
 
   const rows: User[] = ownerRow
@@ -250,9 +250,6 @@ function MemberRow({ user, isOwner, isMe, joinedAt, showMenu, isLastRow, onRemov
             {isMe && (
               <span style={{ marginLeft: 6, color: 'var(--cw-ink-4)', fontWeight: 400 }}>(you)</span>
             )}
-          </p>
-          <p style={{ margin: 0, fontSize: 11, color: 'var(--cw-ink-4)', fontFamily: 'var(--cw-font-mono)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-            {user.email}
           </p>
         </div>
       </div>
