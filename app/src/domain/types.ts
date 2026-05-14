@@ -1,4 +1,4 @@
-export type UserId = 'olive' | 'milo' | 'owen' | 'ai';
+export type UserId = string;
 export type ProjectId = string;
 export type SessionId = string;
 export type ShareMode = 'private' | 'shared_readonly' | 'shared_chat';
@@ -20,7 +20,6 @@ export interface Project {
   description: string;
   ownerId: UserId;
   memberIds: UserId[];
-  isPersonal?: boolean;
 }
 
 export interface Session {

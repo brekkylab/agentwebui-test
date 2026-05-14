@@ -3,8 +3,32 @@ import { Icon, type IconName } from './Icon';
 import { intentMeta, shareMeta } from '../domain/metadata';
 import type { SessionIntent, ShareMode, User } from '../domain/types';
 
-export function EmptyState({ title, body, action, onAction }: { title: string; body: string; action?: string; onAction?: () => void }) {
-  return <div className="cw-empty-state"><span className="cw-empty-chip">AI</span><div><b>{title}</b><p>{body}</p>{action && onAction && <button className="cw-btn-secondary" onClick={onAction}>{action}</button>}</div></div>;
+export function EmptyState({
+  title,
+  body,
+  action,
+  onAction,
+  chip = 'AI',
+}: {
+  title: string;
+  body: string;
+  action?: string;
+  onAction?: () => void;
+  // Override the chip label. Defaults to 'AI' because the original use site was
+  // the chat surface. For non-chat empty states pass a context-appropriate chip
+  // (e.g. '+', '🗂', or a ReactNode).
+  chip?: ReactNode;
+}) {
+  return (
+    <div className="cw-empty-state">
+      <span className="cw-empty-chip">{chip}</span>
+      <div>
+        <b>{title}</b>
+        <p>{body}</p>
+        {action && onAction && <button className="cw-btn-secondary" onClick={onAction}>{action}</button>}
+      </div>
+    </div>
+  );
 }
 
 export function SectionLabel({ children }: { children: ReactNode }) {

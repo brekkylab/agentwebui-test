@@ -1,4 +1,6 @@
 @import "./cowork-design-system.css";
+@import "./chat.css";
+@import "highlight.js/styles/atom-one-light.css";
 
 * { box-sizing: border-box; }
 html, body, #root { min-height: 100%; }
@@ -616,3 +618,107 @@ button:disabled { cursor: not-allowed; opacity: .48; transform: none !important;
 .cw-file-path .cw-pocket.is-compact { width: 18px; height: 18px; border-radius: 5px; }
 .cw-knowledge h2 .cw-pocket,
 .cw-dropzone > .cw-pocket { width: 28px; height: 28px; border-radius: 7px; }
+
+/* app-live backend-v2 integration affordances */
+.cw-live-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 0 0 12px;
+  padding: 10px 14px;
+  border: 1px solid color-mix(in oklch, var(--cw-ink), transparent 86%);
+  border-radius: 18px;
+  background: linear-gradient(135deg, color-mix(in oklch, var(--cw-surface), white 18%), color-mix(in oklch, var(--cw-accent), transparent 88%));
+  color: var(--cw-ink);
+  font-size: 13px;
+  box-shadow: var(--cw-shadow-soft);
+}
+
+.cw-live-banner .is-demo {
+  color: var(--cw-warm-ink);
+  font-weight: 800;
+}
+
+.cw-live-banner button {
+  border: 0;
+  border-radius: 999px;
+  padding: 7px 12px;
+  background: var(--cw-ink);
+  color: white;
+  cursor: pointer;
+}
+
+.cw-live-login {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  padding: 28px;
+  background:
+    radial-gradient(circle at 22% 18%, color-mix(in oklch, var(--cw-accent), transparent 70%), transparent 30%),
+    radial-gradient(circle at 82% 72%, color-mix(in oklch, var(--cw-member-milo), transparent 70%), transparent 34%),
+    linear-gradient(135deg, var(--cw-surface), var(--cw-canvas));
+}
+
+.cw-live-login-card {
+  width: min(520px, 100%);
+  padding: 34px;
+  border-radius: 32px;
+  background: color-mix(in oklch, white, var(--cw-surface) 16%);
+  border: 1px solid color-mix(in oklch, var(--cw-ink), transparent 88%);
+  box-shadow: var(--cw-shadow-lift);
+}
+
+.cw-live-login-card img {
+  width: 54px;
+  height: 54px;
+}
+
+.cw-live-login-card h1 {
+  margin: 8px 0;
+  font-size: clamp(32px, 6vw, 54px);
+  line-height: 0.94;
+  letter-spacing: -0.05em;
+}
+
+.cw-live-login-card form {
+  display: grid;
+  gap: 12px;
+  margin: 20px 0;
+}
+
+.cw-live-login-card label {
+  display: grid;
+  gap: 6px;
+  font-weight: 800;
+  color: var(--cw-muted);
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.cw-live-login-card input {
+  width: 100%;
+  border: 1px solid color-mix(in oklch, var(--cw-ink), transparent 84%);
+  border-radius: 16px;
+  padding: 12px 14px;
+  font: inherit;
+  color: var(--cw-ink);
+  background: white;
+}
+
+.cw-live-login-error {
+  border: 1px solid color-mix(in oklch, crimson, transparent 70%);
+  color: oklch(0.45 0.17 28);
+  background: color-mix(in oklch, crimson, white 92%);
+  border-radius: 14px;
+  padding: 10px 12px;
+  font-weight: 700;
+}
+
+@media (max-width: 720px) {
+  .cw-live-banner {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+}
