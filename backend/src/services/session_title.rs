@@ -28,9 +28,9 @@ pub async fn generate_session_title(first_user_text: &str) -> String {
 async fn call_llm_for_session_title(text: &str) -> Result<String, String> {
     let mut agent = AgentBuilder::new(TITLE_MODEL)
         .instruction(
-            "You are a concise title generator. \
-             Respond with a single short phrase (under 60 characters) that captures the topic. \
-             No quotes, no trailing punctuation.",
+            format!("You are a concise title generator. \
+             Respond with a single short phrase (under {TITLE_MAX_LEN} characters) that captures the topic. \
+             No quotes, no trailing punctuation."),
         )
         .build()
         .map_err(|e| e.to_string())?;
