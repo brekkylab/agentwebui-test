@@ -422,9 +422,9 @@ async fn repository_get_first_user_message_text() {
     );
 }
 
-/// set_session_title saves the title and GET /sessions/{id} returns it.
+/// set_title saves the title and GET /sessions/{id} returns it.
 #[tokio::test]
-async fn set_session_title_persisted_in_response() {
+async fn set_title_persisted_in_response() {
     let (app, repo, _state) = common::make_app_repo_state().await;
 
     let alice_info = common::signup(&app, "alice_title", "Password123!").await;
@@ -466,13 +466,13 @@ async fn set_session_title_persisted_in_response() {
     assert_eq!(
         body["title"].as_str(),
         Some("My session title"),
-        "title should be set after set_session_title: {body}"
+        "title should be set after set_title: {body}"
     );
 }
 
-/// set_session_title is a no-op if title is already set.
+/// set_title is a no-op if title is already set.
 #[tokio::test]
-async fn set_session_title_does_not_overwrite_existing() {
+async fn set_title_does_not_overwrite_existing() {
     let (app, repo, _state) = common::make_app_repo_state().await;
 
     let alice_info = common::signup(&app, "alice_title2", "Password123!").await;

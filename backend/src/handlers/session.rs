@@ -24,7 +24,7 @@ use crate::{
         SessionResponse, UpdateSessionRequest,
     },
     repository::SessionAccess,
-    services::title::generate_title,
+    services::session_title::generate_session_title,
     state::AppState,
 };
 
@@ -510,7 +510,7 @@ pub async fn send_message(
         let repo = state.repository.clone();
         if let Ok(Some(text)) = repo.get_first_user_message_text(session_id).await {
             tokio::spawn(async move {
-                let title = generate_title(&text).await;
+                let title = generate_session_title(&text).await;
                 let _ = repo.set_session_title(session_id, &title).await;
             });
         }
@@ -600,7 +600,7 @@ pub async fn send_message_stream(
             let repo2 = repo.clone();
             if let Ok(Some(text)) = repo.get_first_user_message_text(session_id).await {
                 tokio::spawn(async move {
-                    let title = generate_title(&text).await;
+                    let title = generate_session_title(&text).await;
                     let _ = repo2.set_session_title(session_id, &title).await;
                 });
             }

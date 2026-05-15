@@ -1,1 +1,1 @@
-pub mod title;
+pub mod session_title;

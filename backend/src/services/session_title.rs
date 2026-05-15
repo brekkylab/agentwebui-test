@@ -12,7 +12,7 @@ const TITLE_TIMEOUT_SECS: u64 = 15;
 
 /// Generate a one-sentence title for a session from the first user message.
 /// Falls back to the first `TITLE_FALLBACK_LEN` characters on any error.
-pub async fn generate_title(first_user_text: &str) -> String {
+pub async fn generate_session_title(first_user_text: &str) -> String {
     let fallback = || {
         first_user_text
             .chars()
@@ -22,17 +22,17 @@ pub async fn generate_title(first_user_text: &str) -> String {
 
     let result: Result<Result<String, String>, _> = tokio::time::timeout(
         Duration::from_secs(TITLE_TIMEOUT_SECS),
-        call_llm_for_title(first_user_text),
+        call_llm_for_session_title(first_user_text),
     )
     .await;
 
     match result {
-        Ok(Ok(title)) if !title.trim().is_empty() => sanitize_title(&title),
+        Ok(Ok(title)) if !title.trim().is_empty() => sanitize_session_title(&title),
         _ => fallback(),
     }
 }
 
-async fn call_llm_for_title(text: &str) -> Result<String, String> {
+async fn call_llm_for_session_title(text: &str) -> Result<String, String> {
     let mut agent = AgentBuilder::new(TITLE_MODEL)
         .instruction(
             "You are a concise title generator. \
@@ -58,7 +58,7 @@ async fn call_llm_for_title(text: &str) -> Result<String, String> {
     Ok(parts.join(""))
 }
 
-fn sanitize_title(s: &str) -> String {
+fn sanitize_session_title(s: &str) -> String {
     s.chars()
         .filter(|c| !c.is_control())
         .collect::<String>()
