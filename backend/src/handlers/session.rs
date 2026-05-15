@@ -479,6 +479,11 @@ pub async fn send_message(
         return Err(AppError::forbidden("read-only access to this session"));
     }
 
+    // `need_title` is read before acquiring the agent lock. This is safe because
+    // `try_lock` serializes all non-streaming send_message requests: if another
+    // request is currently processing (and may be generating the title), this
+    // request returns 423. The `set_session_title` guard (WHERE title IS NULL)
+    // prevents double-writes in any remaining edge cases.
     let need_title = session.title.is_none();
     let agent_arc = resolve_agent_for(&state, session.id, session.project_id).await?;
 
