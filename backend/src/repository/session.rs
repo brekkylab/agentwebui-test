@@ -352,12 +352,19 @@ impl SqliteRepository {
             .await?;
         }
 
-        sqlx::query("UPDATE sessions SET updated_at = ?, last_message_at = ? WHERE id = ?;")
-            .bind(&now)
-            .bind(&now)
-            .bind(&sid)
-            .execute(&self.pool)
-            .await?;
+        // Use MAX(created_at) from messages so this path is consistent with fork_session,
+        // which derives last_message_at from message timestamps rather than server clock.
+        sqlx::query(
+            "UPDATE sessions \
+             SET updated_at = ?, \
+                 last_message_at = (SELECT MAX(created_at) FROM session_messages WHERE session_id = ?) \
+             WHERE id = ?;",
+        )
+        .bind(&now)
+        .bind(&sid)
+        .bind(&sid)
+        .execute(&self.pool)
+        .await?;
 
         Ok(())
     }
