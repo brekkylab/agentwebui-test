@@ -328,4 +328,356 @@ mod tests {
         assert!(repo.get_user_by_id(id).await.unwrap().is_none());
         assert!(!repo.delete_user(id).await.unwrap());
     }
+
+    // -----------------------------------------------------------------------
+    // automation suite
+    // -----------------------------------------------------------------------
+
+    mod automation_tests {
+        use std::sync::Arc;
+
+        use chrono::{Duration as ChronoDuration, Utc};
+        use uuid::Uuid;
+
+        use super::{make_project, make_repo, make_user};
+        use crate::{
+            model::{EventKind, RunStatus, TriggerKind, TriggerSpec},
+            repository::SessionOrigin,
+        };
+
+        async fn fixtures(repo: &crate::repository::SqliteRepository) -> (Uuid, Uuid) {
+            let user_id = make_user(repo, "automation_user").await;
+            let project_id = make_project(&repo.pool, user_id).await;
+            (project_id, user_id)
+        }
+
+        #[tokio::test]
+        async fn automation_crud_roundtrip() {
+            let repo = make_repo("sqlite::memory:").await;
+            let (project_id, user_id) = fixtures(&repo).await;
+
+            let created = repo
+                .create_automation(
+                    project_id,
+                    "demo".to_string(),
+                    Some("desc".to_string()),
+                    vec!["first prompt".to_string(), "second prompt".to_string()],
+                    user_id,
+                )
+                .await
+                .unwrap();
+
+            assert_eq!(created.name, "demo");
+            assert_eq!(created.prompts.len(), 2);
+
+            let fetched = repo.get_automation(created.id).await.unwrap().unwrap();
+            assert_eq!(fetched.prompts[1], "second prompt");
+
+            let updated = repo
+                .update_automation(
+                    created.id,
+                    Some("renamed".to_string()),
+                    None,
+                    Some(vec!["only one".to_string()]),
+                )
+                .await
+                .unwrap();
+            assert_eq!(updated.name, "renamed");
+            assert_eq!(updated.prompts, vec!["only one"]);
+
+            let listed = repo.list_automations_in_project(project_id).await.unwrap();
+            assert_eq!(listed.len(), 1);
+
+            assert!(repo.delete_automation(created.id).await.unwrap());
+            assert!(repo.get_automation(created.id).await.unwrap().is_none());
+        }
+
+        #[tokio::test]
+        async fn trigger_create_and_find_by_webhook_token_hash() {
+            let repo = make_repo("sqlite::memory:").await;
+            let (project_id, user_id) = fixtures(&repo).await;
+            let auto = repo
+                .create_automation(project_id, "a".into(), None, vec!["p".into()], user_id)
+                .await
+                .unwrap();
+
+            let spec = TriggerSpec::Webhook {
+                dedupe: Some("payload_hash".into()),
+            };
+            let token_hash = "abcd1234".repeat(8); // 64 chars, plausible sha256 hex
+            let trigger = repo
+                .create_trigger(auto.id, &spec, Some(token_hash.clone()), None)
+                .await
+                .unwrap();
+            assert_eq!(trigger.kind, TriggerKind::Webhook);
+            assert!(trigger.enabled);
+
+            let found = repo
+                .find_trigger_by_webhook_token_hash(&token_hash)
+                .await
+                .unwrap()
+                .expect("should find by token hash");
+            assert_eq!(found.id, trigger.id);
+
+            assert!(
+                repo.find_trigger_by_webhook_token_hash("nope")
+                    .await
+                    .unwrap()
+                    .is_none()
+            );
+
+            // duplicate hash → unique violation
+            let err = repo
+                .create_trigger(auto.id, &spec, Some(token_hash.clone()), None)
+                .await
+                .unwrap_err();
+            assert!(matches!(
+                err,
+                crate::repository::RepositoryError::UniqueViolation(_)
+            ));
+        }
+
+        #[tokio::test]
+        async fn list_due_cron_triggers_filters_by_time_and_kind() {
+            let repo = make_repo("sqlite::memory:").await;
+            let (project_id, user_id) = fixtures(&repo).await;
+            let auto = repo
+                .create_automation(project_id, "a".into(), None, vec!["p".into()], user_id)
+                .await
+                .unwrap();
+
+            let now = Utc::now();
+            // Due cron trigger
+            let due_spec = TriggerSpec::Cron {
+                expr: "* * * * *".into(),
+                tz: None,
+            };
+            let due = repo
+                .create_trigger(auto.id, &due_spec, None, Some(now - ChronoDuration::seconds(10)))
+                .await
+                .unwrap();
+
+            // Future cron trigger — not due yet
+            repo.create_trigger(
+                auto.id,
+                &due_spec,
+                None,
+                Some(now + ChronoDuration::hours(1)),
+            )
+            .await
+            .unwrap();
+
+            // Webhook trigger should be excluded
+            repo.create_trigger(
+                auto.id,
+                &TriggerSpec::Webhook { dedupe: None },
+                Some("hash_aaa".repeat(8)),
+                None,
+            )
+            .await
+            .unwrap();
+
+            let due_list = repo.list_due_cron_triggers(now).await.unwrap();
+            assert_eq!(due_list.len(), 1);
+            assert_eq!(due_list[0].id, due.id);
+        }
+
+        #[tokio::test]
+        async fn claim_due_run_picks_one_at_a_time() {
+            let repo = Arc::new(make_repo("sqlite::memory:").await);
+            let (project_id, user_id) = fixtures(&repo).await;
+            let auto = repo
+                .create_automation(project_id, "a".into(), None, vec!["p".into()], user_id)
+                .await
+                .unwrap();
+            let session = repo
+                .create_session_with_origin(project_id, user_id, SessionOrigin::Automation)
+                .await
+                .unwrap();
+            let now = Utc::now();
+            let run = repo
+                .create_run(auto.id, None, session.id, now - ChronoDuration::seconds(1), None)
+                .await
+                .unwrap();
+
+            // Two concurrent claim attempts — only one should win.
+            let lease_until = now + ChronoDuration::minutes(5);
+            let r1 = repo.clone();
+            let r2 = repo.clone();
+            let h1 = tokio::spawn(async move { r1.claim_due_run(now, lease_until).await });
+            let h2 = tokio::spawn(async move { r2.claim_due_run(now, lease_until).await });
+
+            let a = h1.await.unwrap().unwrap();
+            let b = h2.await.unwrap().unwrap();
+
+            let winners = [a.is_some(), b.is_some()].iter().filter(|x| **x).count();
+            assert_eq!(winners, 1, "exactly one claim must succeed");
+
+            let claimed = repo.get_run(run.id).await.unwrap().unwrap();
+            assert_eq!(claimed.status, RunStatus::Running);
+            assert!(claimed.lease_until.is_some());
+
+            // No further claims should pick it up.
+            let none_left = repo.claim_due_run(now, lease_until).await.unwrap();
+            assert!(none_left.is_none());
+        }
+
+        #[tokio::test]
+        async fn claim_skips_future_scheduled_runs() {
+            let repo = make_repo("sqlite::memory:").await;
+            let (project_id, user_id) = fixtures(&repo).await;
+            let auto = repo
+                .create_automation(project_id, "a".into(), None, vec!["p".into()], user_id)
+                .await
+                .unwrap();
+            let session = repo
+                .create_session_with_origin(project_id, user_id, SessionOrigin::Automation)
+                .await
+                .unwrap();
+            let now = Utc::now();
+            let future = now + ChronoDuration::minutes(10);
+            repo.create_run(auto.id, None, session.id, future, None)
+                .await
+                .unwrap();
+
+            assert!(
+                repo.claim_due_run(now, now + ChronoDuration::minutes(1))
+                    .await
+                    .unwrap()
+                    .is_none()
+            );
+        }
+
+        #[tokio::test]
+        async fn renew_lease_and_reap_expired() {
+            let repo = make_repo("sqlite::memory:").await;
+            let (project_id, user_id) = fixtures(&repo).await;
+            let auto = repo
+                .create_automation(project_id, "a".into(), None, vec!["p".into()], user_id)
+                .await
+                .unwrap();
+            let session = repo
+                .create_session_with_origin(project_id, user_id, SessionOrigin::Automation)
+                .await
+                .unwrap();
+            let claim_time = Utc::now();
+            let scheduled_for = claim_time - ChronoDuration::seconds(1);
+            repo.create_run(auto.id, None, session.id, scheduled_for, None)
+                .await
+                .unwrap();
+
+            // Claim with a short lease.
+            let short_lease = claim_time + ChronoDuration::seconds(1);
+            let claimed = repo
+                .claim_due_run(claim_time, short_lease)
+                .await
+                .unwrap()
+                .unwrap();
+
+            // Renew while still running.
+            let new_lease = claim_time + ChronoDuration::minutes(5);
+            assert!(repo.renew_lease(claimed.id, new_lease).await.unwrap());
+
+            // Mark as failed → lease no longer renewable.
+            repo.update_run_status(claimed.id, RunStatus::Failed, true)
+                .await
+                .unwrap();
+            assert!(!repo.renew_lease(claimed.id, new_lease).await.unwrap());
+
+            // Now set up another expired-lease run for reaping.
+            let session2 = repo
+                .create_session_with_origin(project_id, user_id, SessionOrigin::Automation)
+                .await
+                .unwrap();
+            repo.create_run(auto.id, None, session2.id, scheduled_for, None)
+                .await
+                .unwrap();
+            let expired_lease = claim_time + ChronoDuration::seconds(1);
+            let run2 = repo
+                .claim_due_run(claim_time, expired_lease)
+                .await
+                .unwrap()
+                .unwrap();
+
+            // Reaper: now is past expired_lease, so this run should be reaped.
+            let after_expiry = expired_lease + ChronoDuration::seconds(5);
+            let reaped = repo.reap_expired_leases(after_expiry).await.unwrap();
+            assert_eq!(reaped, vec![run2.id]);
+
+            let reset = repo.get_run(run2.id).await.unwrap().unwrap();
+            assert_eq!(reset.status, RunStatus::Queued);
+            assert!(reset.lease_until.is_none());
+        }
+
+        #[tokio::test]
+        async fn events_append_and_list_in_order() {
+            let repo = make_repo("sqlite::memory:").await;
+            let (project_id, user_id) = fixtures(&repo).await;
+            let auto = repo
+                .create_automation(project_id, "a".into(), None, vec!["p".into()], user_id)
+                .await
+                .unwrap();
+            let session = repo
+                .create_session_with_origin(project_id, user_id, SessionOrigin::Automation)
+                .await
+                .unwrap();
+            let run = repo
+                .create_run(auto.id, None, session.id, Utc::now(), None)
+                .await
+                .unwrap();
+
+            repo.append_event(run.id, EventKind::Triggered, 1, None)
+                .await
+                .unwrap();
+            repo.append_event(run.id, EventKind::Queued, 1, None)
+                .await
+                .unwrap();
+            repo.append_event(
+                run.id,
+                EventKind::StepStarted,
+                1,
+                Some(&serde_json::json!({ "step_index": 0 })),
+            )
+            .await
+            .unwrap();
+
+            let events = repo.list_events_for_run(run.id).await.unwrap();
+            assert_eq!(events.len(), 3);
+            assert_eq!(events[0].kind, EventKind::Triggered);
+            assert_eq!(events[2].kind, EventKind::StepStarted);
+            assert_eq!(
+                events[2].payload.as_ref().unwrap()["step_index"]
+                    .as_i64()
+                    .unwrap(),
+                0
+            );
+        }
+
+        #[tokio::test]
+        async fn trigger_spec_roundtrip_through_db() {
+            let repo = make_repo("sqlite::memory:").await;
+            let (project_id, user_id) = fixtures(&repo).await;
+            let auto = repo
+                .create_automation(project_id, "a".into(), None, vec!["p".into()], user_id)
+                .await
+                .unwrap();
+            let original = TriggerSpec::Cron {
+                expr: "*/15 * * * *".into(),
+                tz: Some("UTC".into()),
+            };
+            let t = repo
+                .create_trigger(auto.id, &original, None, None)
+                .await
+                .unwrap();
+
+            let reloaded = TriggerSpec::from_db(t.kind, &t.spec_json).unwrap();
+            match reloaded {
+                TriggerSpec::Cron { expr, tz } => {
+                    assert_eq!(expr, "*/15 * * * *");
+                    assert_eq!(tz.as_deref(), Some("UTC"));
+                }
+                _ => panic!("expected Cron variant"),
+            }
+        }
+    }
 }

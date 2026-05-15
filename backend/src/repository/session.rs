@@ -35,6 +35,30 @@ impl ShareMode {
     }
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum SessionOrigin {
+    User,
+    Automation,
+}
+
+impl SessionOrigin {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            SessionOrigin::User => "user",
+            SessionOrigin::Automation => "automation",
+        }
+    }
+
+    pub fn from_str(s: &str) -> Option<Self> {
+        match s {
+            "user" => Some(SessionOrigin::User),
+            "automation" => Some(SessionOrigin::Automation),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub enum SessionAccess {
     Admin, // Session Creator or Project Owner
@@ -48,6 +72,7 @@ pub struct DbSession {
     pub project_id: Uuid,
     pub creator_id: Uuid,
     pub share_mode: ShareMode,
+    pub origin: SessionOrigin,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -58,6 +83,12 @@ impl SqliteRepository {
         let share_mode = ShareMode::from_str(&share_mode_str).ok_or_else(|| {
             crate::repository::RepositoryError::InvalidData(format!(
                 "invalid share_mode: {share_mode_str}"
+            ))
+        })?;
+        let origin_str: String = row.get("origin");
+        let origin = SessionOrigin::from_str(&origin_str).ok_or_else(|| {
+            crate::repository::RepositoryError::InvalidData(format!(
+                "invalid session origin: {origin_str}"
             ))
         })?;
         Ok(DbSession {
@@ -71,6 +102,7 @@ impl SqliteRepository {
                 "sessions.creator_id",
             )?,
             share_mode,
+            origin,
             created_at: Self::parse_timestamp(
                 row.get::<String, _>("created_at"),
                 "sessions.created_at",
@@ -87,15 +119,26 @@ impl SqliteRepository {
         project_id: Uuid,
         creator_id: Uuid,
     ) -> RepositoryResult<DbSession> {
+        self.create_session_with_origin(project_id, creator_id, SessionOrigin::User)
+            .await
+    }
+
+    pub async fn create_session_with_origin(
+        &self,
+        project_id: Uuid,
+        creator_id: Uuid,
+        origin: SessionOrigin,
+    ) -> RepositoryResult<DbSession> {
         let id = Uuid::new_v4();
         let now = Self::now_string();
         sqlx::query(
-            "INSERT INTO sessions (id, project_id, creator_id, share_mode, created_at, updated_at) \
-             VALUES (?, ?, ?, 'private', ?, ?);",
+            "INSERT INTO sessions (id, project_id, creator_id, share_mode, origin, created_at, updated_at) \
+             VALUES (?, ?, ?, 'private', ?, ?, ?);",
         )
         .bind(id.to_string())
         .bind(project_id.to_string())
         .bind(creator_id.to_string())
+        .bind(origin.as_str())
         .bind(&now)
         .bind(&now)
         .execute(&self.pool)
@@ -106,6 +149,7 @@ impl SqliteRepository {
             project_id,
             creator_id,
             share_mode: ShareMode::Private,
+            origin,
             created_at: Self::parse_timestamp(now.clone(), "sessions.created_at")?,
             updated_at: Self::parse_timestamp(now, "sessions.updated_at")?,
         })
@@ -113,7 +157,7 @@ impl SqliteRepository {
 
     pub async fn get_session(&self, id: Uuid) -> RepositoryResult<Option<DbSession>> {
         let row = sqlx::query(
-            "SELECT id, project_id, creator_id, share_mode, created_at, updated_at \
+            "SELECT id, project_id, creator_id, share_mode, origin, created_at, updated_at \
              FROM sessions WHERE id = ?;",
         )
         .bind(id.to_string())
@@ -133,7 +177,7 @@ impl SqliteRepository {
         let sid = session_id.to_string();
 
         let row = sqlx::query(
-            "SELECT s.id, s.project_id, s.creator_id, s.share_mode, s.created_at, s.updated_at,
+            "SELECT s.id, s.project_id, s.creator_id, s.share_mode, s.origin, s.created_at, s.updated_at,
                     CASE
                         WHEN p.owner_id = ?1 THEN 'admin'
                         WHEN s.creator_id = ?1 AND pm.user_id IS NOT NULL THEN 'admin'
@@ -176,7 +220,7 @@ impl SqliteRepository {
         let uid = requesting_user_id.to_string();
 
         let rows = sqlx::query(
-            "SELECT s.id, s.project_id, s.creator_id, s.share_mode, s.created_at, s.updated_at
+            "SELECT s.id, s.project_id, s.creator_id, s.share_mode, s.origin, s.created_at, s.updated_at
              FROM sessions s
              JOIN projects p ON p.id = s.project_id
              WHERE s.project_id = ?1
@@ -229,7 +273,7 @@ impl SqliteRepository {
         project_id: Uuid,
     ) -> RepositoryResult<Vec<DbSession>> {
         let rows = sqlx::query(
-            "SELECT id, project_id, creator_id, share_mode, created_at, updated_at \
+            "SELECT id, project_id, creator_id, share_mode, origin, created_at, updated_at \
              FROM sessions WHERE project_id = ? \
              ORDER BY created_at DESC",
         )
@@ -284,6 +328,7 @@ impl SqliteRepository {
             project_id: source.project_id,
             creator_id: new_creator_id,
             share_mode: ShareMode::Private,
+            origin: SessionOrigin::User,
             created_at: Self::parse_timestamp(now.clone(), "sessions.created_at")?,
             updated_at: Self::parse_timestamp(now, "sessions.updated_at")?,
         })
