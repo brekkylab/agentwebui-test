@@ -1,4 +1,4 @@
-use ailoy::message::{Message, Role};
+use ailoy::message::Message;
 use chrono::{DateTime, Utc};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -489,7 +489,11 @@ impl SqliteRepository {
         }
 
         let uid = user_id.to_string();
-        let placeholders = session_ids.iter().map(|_| "?").collect::<Vec<_>>().join(", ");
+        let placeholders = session_ids
+            .iter()
+            .map(|_| "?")
+            .collect::<Vec<_>>()
+            .join(", ");
         let sql = format!(
             "SELECT sm.session_id, COUNT(*) AS cnt
              FROM session_messages sm

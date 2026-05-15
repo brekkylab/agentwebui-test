@@ -438,8 +438,7 @@ async fn get_first_user_message_skips_non_user_messages() {
     // 6 assistant messages before the first user message
     let mut messages: Vec<Message> = (0..6)
         .map(|i| {
-            Message::new(Role::Assistant)
-                .with_contents([Part::text(format!("assistant {i}"))])
+            Message::new(Role::Assistant).with_contents([Part::text(format!("assistant {i}"))])
         })
         .collect();
     messages.push(Message::new(Role::User).with_contents([Part::text("actual user message")]));
