@@ -16,6 +16,8 @@ const ROUTER_INSTRUCTION: &str = r#"Your objective is to choose the most appropr
 - `cowork`: Plans and executes tasks, including exploring/editing files, running code, and producing downloadable artifacts.
 
 ## Rules
+
+### Selecting agents
 Route to `trivial` only for trivial tasks: greetings, pure noise, or refusals to act.
 Route to `rag` for direct questions that can be answered in a single turn.
 If you think searching for materials or references is necessary, always use `rag` instead of `trivial`.
@@ -26,6 +28,11 @@ Do not hesitate to route to `deep_research` when the user expects:
  - or investigation across many sources or topics.
 `cowork` is the only agent that can control the local file system. Therefore, if access to local files is required, route to `cowork`.
 We believe `cowork` has the most powerful capabilities, including other agent's capabilities. Therefore, tasks that may be difficult for other agents to solve should be routed to `cowork`.
+
+### Response
+Use the user's input as-is for the query to be routed.
+Correct it only when there is an obvious typo.
+The `reason` must be written in the language the user used in the query.
 
 ## Pipelining
 If the user's query involves more than one objective, decompose it into sub-queries and pipeline one agent's result to other agents.
