@@ -3,10 +3,10 @@ use std::{path::PathBuf, sync::Arc};
 use agent_k::knowledge_base::SharedStore;
 use ailoy::agent::Agent;
 use dashmap::DashMap;
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, broadcast};
 use uuid::Uuid;
 
-use crate::{auth::JwtConfig, repository::AppRepository};
+use crate::{auth::JwtConfig, events::WsEvent, repository::AppRepository};
 
 pub struct AppState {
     agents: DashMap<Uuid, Arc<Mutex<Agent>>>,
@@ -15,6 +15,7 @@ pub struct AppState {
     pub jwt: JwtConfig,
     pub data_root: PathBuf,
     pub max_upload_bytes: usize,
+    pub ws_tx: broadcast::Sender<WsEvent>,
 }
 
 impl AppState {
@@ -36,6 +37,7 @@ impl AppState {
                     .ok()
             })
             .unwrap_or(50 * 1024 * 1024);
+        let (ws_tx, _) = broadcast::channel(128);
         Self {
             agents: DashMap::new(),
             repository,
@@ -43,6 +45,7 @@ impl AppState {
             jwt,
             data_root,
             max_upload_bytes,
+            ws_tx,
         }
     }
 

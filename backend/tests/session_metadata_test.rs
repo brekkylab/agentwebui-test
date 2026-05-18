@@ -329,6 +329,31 @@ async fn fork_inherits_title_and_has_zero_unread() {
     );
 }
 
+/// The streaming endpoint must NOT emit a `title` SSE event — title is delivered via WebSocket.
+#[tokio::test]
+async fn stream_does_not_emit_title_sse_event() {
+    dotenvy::dotenv().ok();
+    common::setup_provider().await;
+
+    let (app, _repo, _state) = common::make_app_repo_state().await;
+
+    let username = format!("user_{}", Uuid::new_v4().simple());
+    common::signup(&app, &username, "Password123!").await;
+    let token = common::login(&app, &username, "Password123!").await;
+    let project = common::get_personal_project(&app, &token).await;
+    let project_id = project["id"].as_str().unwrap();
+    let session_id = common::post_session_authed(&app, &token, project_id).await;
+
+    let bytes =
+        common::send_message_stream_raw(&app, session_id, "What is the capital of France?", &token)
+            .await;
+    let title_events = common::parse_sse_events_by_type(&bytes, "title");
+    assert!(
+        title_events.is_empty(),
+        "SSE stream must not emit title events (delivered via WebSocket): {title_events:?}"
+    );
+}
+
 /// send_message on the first message triggers fire-and-forget LLM title generation.
 /// The title should be stored within a reasonable time after the response returns.
 #[tokio::test]

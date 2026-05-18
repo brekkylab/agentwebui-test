@@ -41,6 +41,10 @@ export interface BackendSession {
   project_id: string;
   creator_id: string;
   share_mode: ShareMode;
+  title: string | null;
+  last_message_at: string | null;
+  last_message_snippet: string | null;
+  unread_count: number;
   created_at: string;
   updated_at: string;
 }

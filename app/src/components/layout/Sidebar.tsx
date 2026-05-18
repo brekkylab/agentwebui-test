@@ -170,13 +170,23 @@ export function Sidebar() {
               return (
                 <div
                   key={session.id}
-                  className={`cw-session-row ${session.id === activeSessionId ? 'is-active' : ''}`}
+                  className={[
+                    'cw-session-row',
+                    session.id === activeSessionId ? 'is-active' : '',
+                    session.unreadCount > 0 ? 'is-unread' : '',
+                  ].filter(Boolean).join(' ')}
                   onClick={() => openSession(activeProject.id, session.id)}
                   role="button"
                   tabIndex={0}
                   style={{ cursor: 'pointer' }}
                 >
-                  <IconPocket tone="trust" icon="message-square" compact />
+                  {session.unreadCount > 0 ? (
+                    <span className="cw-unread-badge" aria-label={`unread ${session.unreadCount}`}>
+                      <span className="n">{session.unreadCount}</span>
+                    </span>
+                  ) : (
+                    <IconPocket tone="trust" icon="message-square" compact />
+                  )}
                   <span>{session.title}</span>
                   {session.isAutoAppend && <span className="auto-dot">●</span>}
                   {canDelete && (

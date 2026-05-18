@@ -45,6 +45,13 @@ function SessionPage() {
     setStreaming(false);
   }, [sessionId]);
 
+  // After messages load, mark-read side effect has run on the backend — sync badge in session list.
+  useEffect(() => {
+    if (history.isSuccess) {
+      void queryClient.invalidateQueries({ queryKey: ['sessions', projectId] });
+    }
+  }, [history.isSuccess, history.dataUpdatedAt, projectId, queryClient]);
+
   const allMessages = useMemo<Message[]>(() => [
     ...(history.data ?? []),
     ...liveMessages,
@@ -91,9 +98,11 @@ function SessionPage() {
     } finally {
       setStreaming(false);
       await queryClient.invalidateQueries({ queryKey: ['messages', sessionId] });
+      void queryClient.invalidateQueries({ queryKey: ['session', sessionId] });
+      void queryClient.invalidateQueries({ queryKey: ['sessions', projectId] });
       setLiveMessages([]);
     }
-  }, [composerText, streaming, sessionId, currentUser, queryClient, showToast]);
+  }, [composerText, streaming, sessionId, projectId, currentUser, queryClient, showToast]);
 
   const shareMutation = useMutation({
     mutationFn: (mode: ShareMode) => updateSessionShareMode(sessionId, mode),

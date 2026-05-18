@@ -7,7 +7,7 @@ use ailoy::{
 use futures_util::StreamExt;
 
 const TITLE_MODEL: &str = "openai/gpt-5-nano";
-const TITLE_MAX_LEN: usize = 60;
+pub const TITLE_MAX_LEN: usize = 60;
 const TITLE_TIMEOUT_SECS: u64 = 15;
 
 /// Generate a one-sentence title for a session from the first user message.

@@ -29,6 +29,9 @@ export interface Session {
   shareMode: ShareMode;
   intent: SessionIntent;
   updatedAt: string;
+  lastMessageAt: string | null;
+  lastMessageSnippet: string | null;
+  unreadCount: number;
   references: FileAsset['id'][];
   artifactId?: string;
   isAutoAppend?: boolean;

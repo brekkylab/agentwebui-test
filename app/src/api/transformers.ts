@@ -72,11 +72,14 @@ export function toSession(backend: BackendSession): Session {
   return {
     id: backend.id,
     projectId: backend.project_id,
-    title: `Session ${backend.id.slice(0, 8)}`,
+    title: backend.title ?? '새 대화',
     creatorId: backend.creator_id,
     shareMode: backend.share_mode,
     intent: 'general',
     updatedAt: compactDate(backend.updated_at),
+    lastMessageAt: backend.last_message_at,
+    lastMessageSnippet: backend.last_message_snippet,
+    unreadCount: backend.unread_count,
     references: [],
   };
 }

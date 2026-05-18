@@ -1,5 +1,6 @@
 ALTER TABLE sessions ADD COLUMN title TEXT;
 ALTER TABLE sessions ADD COLUMN last_message_at TEXT;
+ALTER TABLE sessions ADD COLUMN last_message_snippet TEXT;
 
 CREATE TABLE session_reads (
     session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,

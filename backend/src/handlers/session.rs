@@ -479,12 +479,30 @@ pub async fn send_message(
         return Err(AppError::forbidden("read-only access to this session"));
     }
 
-    // `need_title` is read before acquiring the agent lock. This is safe because
-    // `try_lock` serializes all non-streaming send_message requests: if another
-    // request is currently processing (and may be generating the title), this
-    // request returns 423. The `set_session_title` guard (WHERE title IS NULL)
-    // prevents double-writes in any remaining edge cases.
     let need_title = session.title.is_none();
+    let project_id = session.project_id;
+
+    // Spawn title generation immediately — runs concurrently with the agent run
+    if need_title {
+        let repo_title = state.repository.clone();
+        let ws_tx = state.ws_tx.clone();
+        let first_msg = payload.content.clone();
+        tokio::spawn(async move {
+            let title = generate_session_title(&first_msg).await;
+            if repo_title
+                .set_session_title(session_id, &title)
+                .await
+                .is_ok()
+            {
+                let _ = ws_tx.send(crate::events::WsEvent::SessionTitleUpdated {
+                    session_id: session_id.to_string(),
+                    project_id: project_id.to_string(),
+                    title,
+                });
+            }
+        });
+    }
+
     let agent_arc = resolve_agent_for(&state, session.id, session.project_id).await?;
 
     let mut agent = agent_arc
@@ -508,22 +526,10 @@ pub async fn send_message(
         .await
         .map_err(|e| AppError::internal(e.to_string()))?;
 
-    // Auto-mark sender as having read all messages
     let _ = state
         .repository
         .mark_session_read(session_id, auth_user.id)
         .await;
-
-    // Fire-and-forget title generation on first message
-    if need_title {
-        let repo = state.repository.clone();
-        if let Ok(Some(text)) = repo.get_first_user_message_text(session_id).await {
-            tokio::spawn(async move {
-                let title = generate_session_title(&text).await;
-                let _ = repo.set_session_title(session_id, &title).await;
-            });
-        }
-    }
 
     Ok(Json(outputs))
 }
@@ -562,6 +568,31 @@ pub async fn send_message_stream(
     let content = payload.content;
     let need_title = session.title.is_none();
     let sender_id = auth_user.id;
+    let project_id = session.project_id;
+
+    // Spawn title generation immediately — runs concurrently with the agent stream
+    if need_title {
+        let repo_title = repo.clone();
+        let ws_tx = state.ws_tx.clone();
+        let first_msg = content.clone();
+        tokio::spawn(async move {
+            tracing::info!("starting title generation");
+            let title = generate_session_title(&first_msg).await;
+            tracing::info!("title generation finished");
+            if repo_title
+                .set_session_title(session_id, &title)
+                .await
+                .is_ok()
+            {
+                tracing::info!("send title via websocket");
+                let _ = ws_tx.send(crate::events::WsEvent::SessionTitleUpdated {
+                    session_id: session_id.to_string(),
+                    project_id: project_id.to_string(),
+                    title,
+                });
+            }
+        });
+    }
 
     let stream = async_stream::stream! {
         let mut agent = guard;  // OwnedMutexGuard moved in — lock held for stream lifetime
@@ -604,17 +635,7 @@ pub async fn send_message_stream(
         // Auto-mark sender as having read
         let _ = repo.mark_session_read(session_id, sender_id).await;
 
-        // Fire-and-forget title generation on first message
-        if need_title {
-            let repo2 = repo.clone();
-            if let Ok(Some(text)) = repo.get_first_user_message_text(session_id).await {
-                tokio::spawn(async move {
-                    let title = generate_session_title(&text).await;
-                    let _ = repo2.set_session_title(session_id, &title).await;
-                });
-            }
-        }
-
+        tracing::info!("message stream finished");
         yield Ok(Event::default().event("done").data("[DONE]"));
     };
 

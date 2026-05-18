@@ -21,8 +21,7 @@
     "types": ["vite/client", "node"],
     "paths": {
       "@/*": ["./src/*"]
-    },
-    "baseUrl": "."
+    }
   },
   "include": ["src", "tests"]
 }

@@ -50,6 +50,7 @@ pub struct DbSession {
     pub share_mode: ShareMode,
     pub title: Option<String>,
     pub last_message_at: Option<DateTime<Utc>>,
+    pub last_message_snippet: Option<String>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -85,6 +86,9 @@ impl SqliteRepository {
             share_mode,
             title: row.try_get::<Option<String>, _>("title").unwrap_or(None),
             last_message_at,
+            last_message_snippet: row
+                .try_get::<Option<String>, _>("last_message_snippet")
+                .unwrap_or(None),
             created_at: Self::parse_timestamp(
                 row.get::<String, _>("created_at"),
                 "sessions.created_at",
@@ -122,6 +126,7 @@ impl SqliteRepository {
             share_mode: ShareMode::Private,
             title: None,
             last_message_at: None,
+            last_message_snippet: None,
             created_at: Self::parse_timestamp(now.clone(), "sessions.created_at")?,
             updated_at: Self::parse_timestamp(now, "sessions.updated_at")?,
         })
@@ -130,7 +135,7 @@ impl SqliteRepository {
     pub async fn get_session(&self, id: Uuid) -> RepositoryResult<Option<DbSession>> {
         let row = sqlx::query(
             "SELECT id, project_id, creator_id, share_mode, title, last_message_at, \
-                    created_at, updated_at \
+                    last_message_snippet, created_at, updated_at \
              FROM sessions WHERE id = ?;",
         )
         .bind(id.to_string())
@@ -151,7 +156,7 @@ impl SqliteRepository {
 
         let row = sqlx::query(
             "SELECT s.id, s.project_id, s.creator_id, s.share_mode, s.title, \
-                    s.last_message_at, s.created_at, s.updated_at,
+                    s.last_message_at, s.last_message_snippet, s.created_at, s.updated_at,
                     CASE
                         WHEN p.owner_id = ?1 THEN 'admin'
                         WHEN s.creator_id = ?1 AND pm.user_id IS NOT NULL THEN 'admin'
@@ -195,7 +200,7 @@ impl SqliteRepository {
 
         let rows = sqlx::query(
             "SELECT s.id, s.project_id, s.creator_id, s.share_mode, s.title, \
-                    s.last_message_at, s.created_at, s.updated_at
+                    s.last_message_at, s.last_message_snippet, s.created_at, s.updated_at
              FROM sessions s
              JOIN projects p ON p.id = s.project_id
              WHERE s.project_id = ?1
@@ -352,16 +357,33 @@ impl SqliteRepository {
             .await?;
         }
 
+        // Extract text snippet from the last message for session card previews.
+        let snippet = messages
+            .iter()
+            .rev()
+            .find_map(|msg| {
+                let text: String = msg
+                    .contents
+                    .iter()
+                    .filter_map(|p| p.as_text())
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                if text.is_empty() { None } else { Some(text) }
+            })
+            .map(|t| t.chars().take(200).collect::<String>());
+
         // Use MAX(created_at) from messages so this path is consistent with fork_session,
         // which derives last_message_at from message timestamps rather than server clock.
         sqlx::query(
             "UPDATE sessions \
              SET updated_at = ?, \
-                 last_message_at = (SELECT MAX(created_at) FROM session_messages WHERE session_id = ?) \
+                 last_message_at = (SELECT MAX(created_at) FROM session_messages WHERE session_id = ?), \
+                 last_message_snippet = ? \
              WHERE id = ?;",
         )
         .bind(&now)
         .bind(&sid)
+        .bind(snippet.as_deref())
         .bind(&sid)
         .execute(&self.pool)
         .await?;
@@ -380,7 +402,7 @@ impl SqliteRepository {
             .await?;
 
         sqlx::query(
-            "UPDATE sessions SET last_message_at = NULL, title = NULL, updated_at = ? WHERE id = ?;",
+            "UPDATE sessions SET last_message_at = NULL, last_message_snippet = NULL, title = NULL, updated_at = ? WHERE id = ?;",
         )
         .bind(&now)
         .bind(&sid)
