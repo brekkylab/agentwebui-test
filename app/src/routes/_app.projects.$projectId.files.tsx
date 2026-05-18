@@ -15,17 +15,21 @@ import { createPortal } from 'react-dom';
 import { createFileRoute } from '@tanstack/react-router';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
+  copyDirents,
   createFolder,
   deleteDirent,
   downloadFile,
   listDirentsRaw,
+  moveDirents,
   uploadFiles,
-  type UploadResult,
+  type DirentBatchResult,
 } from '@/api/dirents';
 import { getProject } from '@/api/projects';
 import { Icon } from '@/components/Icon';
 import { ConfirmDialog } from '@/components/ConfirmDialog';
+import { FolderPickerDialog } from '@/components/FolderPickerDialog';
 import { NewFolderDialog } from '@/components/NewFolderDialog';
+import { RenameDialog } from '@/components/RenameDialog';
 import { EmptyState, IconPocket } from '@/components/uiPrimitives';
 import { useToastStore } from '@/components/Toast';
 import { ApiError } from '@/api/client';
@@ -131,7 +135,7 @@ function FilesPage() {
     currentPath.length > 0 ? `${currentPath.join('/')}/${file.name}` : file.name;
 
   const uploadMutation = useMutation({
-    mutationFn: async (files: File[]): Promise<UploadResult> => {
+    mutationFn: async (files: File[]): Promise<DirentBatchResult> => {
       const items = files.map((file) => ({ file, targetPath: targetPathFor(file) }));
       return uploadFiles(projectId, items);
     },
@@ -186,6 +190,14 @@ function FilesPage() {
   });
 
   const [pendingDelete, setPendingDelete] = useState<BackendDirent[] | null>(null);
+  const [pendingRename, setPendingRename] = useState<BackendDirent | null>(null);
+  const [pendingMove, setPendingMove] = useState<BackendDirent[] | null>(null);
+  const [pendingCopy, setPendingCopy] = useState<BackendDirent[] | null>(null);
+  const [openMenuPath, setOpenMenuPath] = useState<string | null>(null);
+  const [dropTarget, setDropTarget] = useState<string | null>(null);
+  // Disambiguates "rename via dialog" from generic moves so we can show the
+  // right toast copy ("이름이 변경되었습니다" vs "이동되었습니다").
+  const renamingRef = useRef(false);
 
   const bulkDeleteMutation = useMutation({
     mutationFn: async (targets: BackendDirent[]) => {
@@ -282,6 +294,57 @@ function FilesPage() {
     files.forEach((f) => downloadMutation.mutate(f));
   }, [selectedEntries, downloadMutation, showToast]);
 
+  // Single unified mutation for both rename (1-item move with new_name) and
+  // bulk move. The `renamingRef` flag tells the success/error handler whether
+  // to show "이름이 변경되었습니다" or "이동되었습니다" copy.
+  const moveMutation = useMutation({
+    mutationFn: ({ sources, destination, newName }: { sources: string[]; destination: string; newName?: string }) =>
+      moveDirents(projectId, sources, destination, newName),
+    onSuccess: async (res) => {
+      await queryClient.invalidateQueries({ queryKey: ['dirents', projectId] });
+      const ok = res.succeeded.length;
+      const ko = res.failed.length;
+      const wasRename = renamingRef.current;
+      renamingRef.current = false;
+      if (wasRename) {
+        if (ko === 0) showToast('이름이 변경되었습니다');
+        else showToast('이름 변경 실패', res.failed.map((f) => f.error));
+      } else {
+        if (ko === 0) showToast(ok === 1 ? '이동되었습니다' : `${ok}개 이동되었습니다`);
+        else showToast(`${ok}개 이동, ${ko}개 실패`, res.failed.map((f) => `${f.path} — ${f.error}`));
+      }
+      setPendingRename(null);
+      setPendingMove(null);
+      setSelectedPaths(new Set());
+      anchorRef.current = null;
+    },
+    onError: (err) => {
+      const msg = err instanceof ApiError ? err.message : err instanceof Error ? err.message : 'move failed';
+      const wasRename = renamingRef.current;
+      renamingRef.current = false;
+      showToast(`${wasRename ? '이름 변경' : '이동'} 실패: ${msg}`);
+    },
+  });
+
+  const copyMutation = useMutation({
+    mutationFn: ({ sources, destination }: { sources: string[]; destination: string }) =>
+      copyDirents(projectId, sources, destination),
+    onSuccess: async (res) => {
+      await queryClient.invalidateQueries({ queryKey: ['dirents', projectId] });
+      const ok = res.succeeded.length;
+      const ko = res.failed.length;
+      if (ko === 0) showToast(ok === 1 ? '복사되었습니다' : `${ok}개 복사되었습니다`);
+      else showToast(`${ok}개 복사, ${ko}개 실패`, res.failed.map((f) => `${f.path} — ${f.error}`));
+      setPendingCopy(null);
+      setSelectedPaths(new Set());
+      anchorRef.current = null;
+    },
+    onError: (err) => {
+      const msg = err instanceof ApiError ? err.message : err instanceof Error ? err.message : 'copy failed';
+      showToast(`복사 실패: ${msg}`);
+    },
+  });
+
   // ── Outside click clears selection ───────────────────────────────
   // If the user clicks anywhere that isn't a file-pane interaction, the
   // floating bulk toolbar, or an open dialog, treat it as "dismiss".
@@ -298,14 +361,33 @@ function FilesPage() {
     return () => document.removeEventListener('mousedown', onDocMouseDown);
   }, [selectedPaths.size, clearSelection]);
 
+  // ── Outside click closes ⋯ dropdown ──────────────────────────────
+  useEffect(() => {
+    if (!openMenuPath) return;
+    function onDocClick(e: MouseEvent) {
+      const t = e.target as HTMLElement | null;
+      if (t?.closest('.cw-file-menu-wrap')) return;
+      setOpenMenuPath(null);
+    }
+    document.addEventListener('click', onDocClick, true);
+    return () => document.removeEventListener('click', onDocClick, true);
+  }, [openMenuPath]);
+
   // ── Keyboard shortcuts (window-level) ────────────────────────────
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
       const target = e.target as HTMLElement | null;
       const inField = !!target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable);
 
-      if (e.key === 'Escape') { if (!inField) clearSelection(); return; }
+      if (e.key === 'Escape') { if (!inField) { setOpenMenuPath(null); clearSelection(); } return; }
       if (inField) return;
+
+      if (e.key === 'F2' && selectedPaths.size === 1 && !pendingRename) {
+        e.preventDefault();
+        const entry = entries.find((en) => selectedPaths.has(en.path));
+        if (entry) setPendingRename(entry);
+        return;
+      }
 
       if ((e.key === 'Delete' || e.key === 'Backspace') && selectedPaths.size > 0) {
         e.preventDefault();
@@ -446,6 +528,58 @@ function FilesPage() {
     };
   }, [dragRect]);
 
+  // ── Intra-app drag (move/copy) ───────────────────────────────────
+  // Global safety net: any drag that ends (dropped on a non-target or aborted
+  // with Esc) clears the highlighted folder so it doesn't get stuck visually.
+  useEffect(() => {
+    function onEnd() { setDropTarget(null); }
+    window.addEventListener('dragend', onEnd);
+    return () => window.removeEventListener('dragend', onEnd);
+  }, []);
+
+  // dataTransfer custom MIME distinguishes intra-app drag from external file
+  // upload. Alt/Ctrl/Cmd held during drop → copy; otherwise → move.
+  const handleDragStart = useCallback((e: React.DragEvent, entry: BackendDirent) => {
+    // mousedown started a potential rubber-band; HTML5 drag superseded it.
+    dragOriginRef.current = null;
+    setDragRect(null);
+    e.dataTransfer.effectAllowed = 'copyMove';
+    const dragPaths = selectedPaths.has(entry.path)
+      ? Array.from(selectedPaths)
+      : [entry.path];
+    e.dataTransfer.setData('application/x-cowork-dirent-paths', JSON.stringify(dragPaths));
+    e.dataTransfer.setData('text/plain', dragPaths.join('\n'));
+
+    // The browser's default drag image renders the entire row/card at the
+    // cursor, obscuring the drop area. Replace with a compact pill that just
+    // shows the item count (or filename for a single item).
+    const ghost = document.createElement('div');
+    ghost.className = 'cw-drag-ghost';
+    ghost.textContent = dragPaths.length === 1
+      ? nameOf(entry)
+      : `${dragPaths.length}개 항목`;
+    document.body.appendChild(ghost);
+    e.dataTransfer.setDragImage(ghost, 14, 14);
+    // Browser captures the bitmap synchronously; safe to remove next frame.
+    requestAnimationFrame(() => ghost.remove());
+  }, [selectedPaths]);
+
+  // Returns true if this event was an intra-app drop (handled), false otherwise.
+  const handleDropOnFolder = useCallback((destination: string, e: React.DragEvent): boolean => {
+    const raw = e.dataTransfer.getData('application/x-cowork-dirent-paths');
+    if (!raw) return false;
+    let sources: string[];
+    try { sources = JSON.parse(raw); } catch { return false; }
+    if (sources.some((s) => destination === s || destination.startsWith(s + '/'))) {
+      showToast('자기 자신 또는 하위 폴더로는 이동할 수 없습니다');
+      return true;
+    }
+    const isCopy = e.altKey || e.ctrlKey || e.metaKey;
+    if (isCopy) copyMutation.mutate({ sources, destination });
+    else moveMutation.mutate({ sources, destination });
+    return true;
+  }, [showToast, copyMutation, moveMutation]);
+
   // ── Confirm dialog copy ──────────────────────────────────────────
   const deleteCopy = useMemo(() => describeBulkDelete(pendingDelete, entries), [pendingDelete, entries]);
   const currentPathKey = currentPath.join('/');
@@ -478,8 +612,28 @@ function FilesPage() {
         <aside className="cw-sidebar-tree">
           <button
             type="button"
-            className={`cw-tree-row cw-tree-root${currentPath.length === 0 ? ' is-active' : ''}`}
+            className={`cw-tree-row cw-tree-root${currentPath.length === 0 ? ' is-active' : ''}${dropTarget === '' ? ' is-drop-target' : ''}`}
             onClick={() => setCurrentPath([])}
+            onDragEnter={(e) => {
+              if (!e.dataTransfer.types.includes('application/x-cowork-dirent-paths')) return;
+              e.preventDefault();
+              setDropTarget('');
+            }}
+            onDragOver={(e) => {
+              if (!e.dataTransfer.types.includes('application/x-cowork-dirent-paths')) return;
+              e.preventDefault();
+              e.dataTransfer.dropEffect = e.altKey || e.ctrlKey || e.metaKey ? 'copy' : 'move';
+              setDropTarget('');
+            }}
+            onDragLeave={(e) => {
+              const to = e.relatedTarget as Node | null;
+              if (!to || !e.currentTarget.contains(to)) setDropTarget(null);
+            }}
+            onDrop={(e) => {
+              if (!handleDropOnFolder('', e)) return;
+              e.preventDefault();
+              setDropTarget(null);
+            }}
           >
             <Icon name="folder" size={14} />
             <span>{project.data?.name ?? 'Project'}</span>
@@ -492,8 +646,11 @@ function FilesPage() {
               currentPathKey={currentPathKey}
               expanded={expanded}
               entries={entries}
+              dropTarget={dropTarget}
               onSelect={(segments) => setCurrentPath(segments)}
               onToggle={toggleExpand}
+              onDropOnFolder={handleDropOnFolder}
+              setDropTarget={setDropTarget}
             />
           ))}
         </aside>
@@ -505,6 +662,17 @@ function FilesPage() {
                 <span className="cw-bulk-count">{selectedPaths.size}개 선택됨</span>
                 <button type="button" className="cw-btn-secondary" onClick={bulkDownload}>
                   <Icon name="download" size={13} /> Download
+                </button>
+                {selectedPaths.size === 1 && (
+                  <button type="button" className="cw-btn-secondary" onClick={() => setPendingRename(selectedEntries[0]!)}>
+                    <Icon name="writing" size={13} /> Rename
+                  </button>
+                )}
+                <button type="button" className="cw-btn-secondary" onClick={() => setPendingMove(selectedEntries)}>
+                  <Icon name="chevron-right" size={13} /> 이동
+                </button>
+                <button type="button" className="cw-btn-secondary" onClick={() => setPendingCopy(selectedEntries)}>
+                  <Icon name="file" size={13} /> 복사
                 </button>
                 <button type="button" className="cw-btn-secondary cw-btn-destructive" onClick={requestBulkDelete}>
                   <Icon name="trash" size={13} /> Delete
@@ -545,9 +713,16 @@ function FilesPage() {
             className={`cw-file-body cw-view-${viewMode}${isDraggingOver ? ' is-over' : ''}`}
             onClick={(e) => { if (e.target === e.currentTarget) clearSelection(); }}
             onMouseDown={onBodyMouseDown}
-            onDragEnter={(e) => { e.preventDefault(); dragDepthRef.current += 1; setIsDraggingOver(true); }}
+            onDragEnter={(e) => {
+              // Internal drag (move/copy) doesn't paint the upload over-state.
+              if (e.dataTransfer.types.includes('application/x-cowork-dirent-paths')) return;
+              e.preventDefault();
+              dragDepthRef.current += 1;
+              setIsDraggingOver(true);
+            }}
             onDragOver={(e) => { e.preventDefault(); }}
             onDragLeave={(e) => {
+              if (e.dataTransfer.types.includes('application/x-cowork-dirent-paths')) return;
               e.preventDefault();
               dragDepthRef.current = Math.max(0, dragDepthRef.current - 1);
               if (dragDepthRef.current === 0) setIsDraggingOver(false);
@@ -556,6 +731,9 @@ function FilesPage() {
               e.preventDefault();
               dragDepthRef.current = 0;
               setIsDraggingOver(false);
+              // Intra-app drop on the file body is treated as cancel — only
+              // sidebar tree folders are valid intra-app destinations.
+              if (e.dataTransfer.types.includes('application/x-cowork-dirent-paths')) return;
               onDropFiles(e.dataTransfer.files);
             }}
           >
@@ -579,9 +757,16 @@ function FilesPage() {
                     entries={entries}
                     selected={selectedPaths.has(entry.path)}
                     showPath={view.isSearch}
+                    menuOpen={openMenuPath === entry.path}
                     onSelect={handleSelect}
                     onOpen={openEntry}
+                    onDownload={(e) => downloadMutation.mutate(e)}
                     onDelete={(e) => setPendingDelete([e])}
+                    onRename={(e) => setPendingRename(e)}
+                    onMove={(e) => setPendingMove([e])}
+                    onCopy={(e) => setPendingCopy([e])}
+                    onMenuToggle={setOpenMenuPath}
+                    onDragStart={handleDragStart}
                   />
                 ))}
               </div>
@@ -595,9 +780,16 @@ function FilesPage() {
                     entries={entries}
                     selected={selectedPaths.has(entry.path)}
                     showPath={view.isSearch}
+                    menuOpen={openMenuPath === entry.path}
                     onSelect={handleSelect}
                     onOpen={openEntry}
+                    onDownload={(e) => downloadMutation.mutate(e)}
                     onDelete={(e) => setPendingDelete([e])}
+                    onRename={(e) => setPendingRename(e)}
+                    onMove={(e) => setPendingMove([e])}
+                    onCopy={(e) => setPendingCopy([e])}
+                    onMenuToggle={setOpenMenuPath}
+                    onDragStart={handleDragStart}
                   />
                 ))}
               </div>
@@ -634,6 +826,50 @@ function FilesPage() {
           onClose={() => { if (!bulkDeleteMutation.isPending) setPendingDelete(null); }}
         />
       )}
+
+      {pendingRename && (
+        <RenameDialog
+          entry={pendingRename}
+          existingNames={view.folders.concat(view.files).map(nameOf)}
+          pending={moveMutation.isPending}
+          onConfirm={(newName) => {
+            const parent = pendingRename.path.split('/').slice(0, -1).join('/');
+            renamingRef.current = true;
+            moveMutation.mutate({ sources: [pendingRename.path], destination: parent, newName });
+          }}
+          onClose={() => { if (!moveMutation.isPending) setPendingRename(null); }}
+        />
+      )}
+
+      {pendingMove && (
+        <FolderPickerDialog
+          title="이동"
+          confirmLabel="이동"
+          entries={entries}
+          sources={pendingMove}
+          pending={moveMutation.isPending}
+          onConfirm={(destination) => moveMutation.mutate({
+            sources: pendingMove.map((e) => e.path),
+            destination,
+          })}
+          onClose={() => { if (!moveMutation.isPending) setPendingMove(null); }}
+        />
+      )}
+
+      {pendingCopy && (
+        <FolderPickerDialog
+          title="복사"
+          confirmLabel="복사"
+          entries={entries}
+          sources={pendingCopy}
+          pending={copyMutation.isPending}
+          onConfirm={(destination) => copyMutation.mutate({
+            sources: pendingCopy.map((e) => e.path),
+            destination,
+          })}
+          onClose={() => { if (!copyMutation.isPending) setPendingCopy(null); }}
+        />
+      )}
     </section>
   );
 }
@@ -646,25 +882,62 @@ function TreeBranch({
   currentPathKey,
   expanded,
   entries,
+  dropTarget,
   onSelect,
   onToggle,
+  onDropOnFolder,
+  setDropTarget,
 }: {
   node: FolderNode;
   depth: number;
   currentPathKey: string;
   expanded: Set<string>;
   entries: BackendDirent[];
+  dropTarget: string | null;
   onSelect: (segments: string[]) => void;
   onToggle: (path: string) => void;
+  onDropOnFolder: (destination: string, e: React.DragEvent) => boolean;
+  setDropTarget: (path: string | null) => void;
 }) {
   const isActive = currentPathKey === node.path;
   const hasChildren = node.children.length > 0;
   const isOpen = expanded.has(node.path);
   const count = countDescendants(entries, node.segments);
+  const isDropTarget = dropTarget === node.path;
 
   return (
     <>
-      <div className={`cw-tree-row${isActive ? ' is-active' : ''}`} style={{ paddingLeft: 8 + depth * 14 }}>
+      <div
+        className={`cw-tree-row${isActive ? ' is-active' : ''}${isDropTarget ? ' is-drop-target' : ''}`}
+        style={{ paddingLeft: 8 + depth * 14 }}
+        onDragEnter={(e) => {
+          if (!e.dataTransfer.types.includes('application/x-cowork-dirent-paths')) return;
+          e.preventDefault();
+          e.stopPropagation();
+          setDropTarget(node.path);
+        }}
+        onDragOver={(e) => {
+          if (!e.dataTransfer.types.includes('application/x-cowork-dirent-paths')) return;
+          e.preventDefault();
+          e.stopPropagation();
+          e.dataTransfer.dropEffect = e.altKey || e.ctrlKey || e.metaKey ? 'copy' : 'move';
+          // Re-affirm dropTarget continuously; helps after children flicker.
+          setDropTarget(node.path);
+        }}
+        onDragLeave={(e) => {
+          // dragleave fires when crossing into a child too; only clear if
+          // the cursor moved outside this row entirely. The global dragend
+          // listener catches the case where the drag aborts elsewhere.
+          const to = e.relatedTarget as Node | null;
+          if (!to || !e.currentTarget.contains(to)) setDropTarget(null);
+        }}
+        onDrop={(e) => {
+          if (!onDropOnFolder(node.path, e)) return;
+          e.preventDefault();
+          e.stopPropagation();
+          setDropTarget(null);
+        }}
+      >
         <button
           type="button"
           className="cw-tree-chevron"
@@ -688,8 +961,11 @@ function TreeBranch({
           currentPathKey={currentPathKey}
           expanded={expanded}
           entries={entries}
+          dropTarget={dropTarget}
           onSelect={onSelect}
           onToggle={onToggle}
+          onDropOnFolder={onDropOnFolder}
+          setDropTarget={setDropTarget}
         />
       ))}
     </>
@@ -704,9 +980,16 @@ interface RowProps {
   entries: BackendDirent[];
   selected: boolean;
   showPath: boolean;
+  menuOpen: boolean;
   onSelect: (e: BackendDirent, ev: React.MouseEvent | React.KeyboardEvent) => void;
   onOpen: (e: BackendDirent) => void;
+  onDownload: (e: BackendDirent) => void;
   onDelete: (e: BackendDirent) => void;
+  onRename: (e: BackendDirent) => void;
+  onMove: (e: BackendDirent) => void;
+  onCopy: (e: BackendDirent) => void;
+  onMenuToggle: (path: string | null) => void;
+  onDragStart: (ev: React.DragEvent, e: BackendDirent) => void;
 }
 
 function iconClass(entry: BackendDirent): string {
@@ -723,7 +1006,70 @@ function folderSubtitle(entry: BackendDirent, entries: BackendDirent[]): string 
   return n === 0 ? '빈 폴더' : `${n}개 항목`;
 }
 
-function ListRow({ entry, index, entries, selected, showPath, onSelect, onOpen, onDelete }: RowProps) {
+function RowMenu({
+  entry, menuOpen, onMenuToggle, onDownload, onRename, onMove, onCopy, onDelete,
+}: {
+  entry: BackendDirent;
+  menuOpen: boolean;
+  onMenuToggle: (path: string | null) => void;
+  onDownload: () => void;
+  onRename: () => void;
+  onMove: () => void;
+  onCopy: () => void;
+  onDelete: () => void;
+}) {
+  return (
+    <div className="cw-file-menu-wrap">
+      <button
+        type="button"
+        className="cw-file-more"
+        aria-label="더보기"
+        aria-expanded={menuOpen}
+        onClick={(e) => { e.stopPropagation(); onMenuToggle(menuOpen ? null : entry.path); }}
+      >
+        <Icon name="more" size={14} />
+      </button>
+      {menuOpen && (
+        <ul
+          className="cw-file-dropdown"
+          role="menu"
+          onClick={(e) => e.stopPropagation()}
+        >
+          {entry.kind === 'file' && (
+            <li role="menuitem">
+              <button type="button" onClick={() => { onMenuToggle(null); onDownload(); }}>
+                <Icon name="download" size={13} /> Download
+              </button>
+            </li>
+          )}
+          <li role="menuitem">
+            <button type="button" onClick={() => { onMenuToggle(null); onRename(); }}>
+              <Icon name="writing" size={13} /> Rename
+            </button>
+          </li>
+          <li role="menuitem">
+            <button type="button" onClick={() => { onMenuToggle(null); onMove(); }}>
+              <Icon name="chevron-right" size={13} /> 이동…
+            </button>
+          </li>
+          <li role="menuitem">
+            <button type="button" onClick={() => { onMenuToggle(null); onCopy(); }}>
+              <Icon name="file" size={13} /> 복사…
+            </button>
+          </li>
+          <li role="separator" aria-hidden="true" className="cw-file-dropdown-sep" />
+          <li role="menuitem">
+            <button type="button" className="cw-file-dropdown-destructive" onClick={() => { onMenuToggle(null); onDelete(); }}>
+              <Icon name="trash" size={13} /> Delete
+            </button>
+          </li>
+        </ul>
+      )}
+    </div>
+  );
+}
+
+function ListRow({ entry, index, entries, selected, showPath, menuOpen, onSelect, onOpen, onDownload, onDelete, onRename, onMove, onCopy, onMenuToggle, onDragStart }: RowProps) {
   const isDir = entry.kind === 'dir';
   return (
     <div
@@ -733,6 +1079,8 @@ function ListRow({ entry, index, entries, selected, showPath, onSelect, onOpen, 
       aria-selected={selected}
       data-row-index={index}
       data-row-path={entry.path}
+      draggable
+      onDragStart={(e) => onDragStart(e, entry)}
       onClick={(e) => { e.stopPropagation(); onSelect(entry, e); }}
       onDoubleClick={(e) => { e.stopPropagation(); onOpen(entry); }}
       onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); onOpen(entry); } }}
@@ -749,19 +1097,21 @@ function ListRow({ entry, index, entries, selected, showPath, onSelect, onOpen, 
             : `${entry.modified_at ? new Date(entry.modified_at).toLocaleDateString() : '—'} · ${formatBytes(entry.bytes ?? 0)}`}
         </span>
       </span>
-      <button
-        type="button"
-        className="cw-file-more"
-        aria-label={isDir ? '폴더 삭제' : '파일 삭제'}
-        onClick={(e) => { e.stopPropagation(); onDelete(entry); }}
-      >
-        <Icon name="trash" size={14} />
-      </button>
+      <RowMenu
+        entry={entry}
+        menuOpen={menuOpen}
+        onMenuToggle={onMenuToggle}
+        onDownload={() => onDownload(entry)}
+        onRename={() => onRename(entry)}
+        onMove={() => onMove(entry)}
+        onCopy={() => onCopy(entry)}
+        onDelete={() => onDelete(entry)}
+      />
     </div>
   );
 }
 
-function GridCard({ entry, index, entries, selected, showPath, onSelect, onOpen, onDelete }: RowProps) {
+function GridCard({ entry, index, entries, selected, showPath, menuOpen, onSelect, onOpen, onDownload, onDelete, onRename, onMove, onCopy, onMenuToggle, onDragStart }: RowProps) {
   const isDir = entry.kind === 'dir';
   return (
     <div
@@ -771,6 +1121,8 @@ function GridCard({ entry, index, entries, selected, showPath, onSelect, onOpen,
       aria-selected={selected}
       data-row-index={index}
       data-row-path={entry.path}
+      draggable
+      onDragStart={(e) => onDragStart(e, entry)}
       onClick={(e) => { e.stopPropagation(); onSelect(entry, e); }}
       onDoubleClick={(e) => { e.stopPropagation(); onOpen(entry); }}
       onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); onOpen(entry); } }}
@@ -786,14 +1138,16 @@ function GridCard({ entry, index, entries, selected, showPath, onSelect, onOpen,
             ? folderSubtitle(entry, entries)
             : formatBytes(entry.bytes ?? 0)}
       </div>
-      <button
-        type="button"
-        className="cw-grid-card-more"
-        aria-label={isDir ? '폴더 삭제' : '파일 삭제'}
-        onClick={(e) => { e.stopPropagation(); onDelete(entry); }}
-      >
-        <Icon name="trash" size={13} />
-      </button>
+      <RowMenu
+        entry={entry}
+        menuOpen={menuOpen}
+        onMenuToggle={onMenuToggle}
+        onDownload={() => onDownload(entry)}
+        onRename={() => onRename(entry)}
+        onMove={() => onMove(entry)}
+        onCopy={() => onCopy(entry)}
+        onDelete={() => onDelete(entry)}
+      />
     </div>
   );
 }

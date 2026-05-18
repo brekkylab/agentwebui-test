@@ -1,9 +1,13 @@
 import { ApiError, getBaseUrl, getToken, request } from './client';
-import type { BackendDirent, BackendUploadResponse } from './backend-types';
+import type {
+  BackendDirent,
+  BackendDirentBatchOp,
+  BackendDirentBatchResult,
+} from './backend-types';
 import { toFileAsset } from './transformers';
 import type { FileAsset } from '@/domain/types';
 
-export type UploadResult = BackendUploadResponse;
+export type DirentBatchResult = BackendDirentBatchResult;
 
 function encodePath(path: string): string {
   return path.split('/').map(encodeURIComponent).join('/');
@@ -25,7 +29,7 @@ export async function listDirentsRaw(projectId: string, recursive = true): Promi
   return res.entries;
 }
 
-export async function uploadFile(projectId: string, file: File, targetPath: string): Promise<UploadResult> {
+export async function uploadFile(projectId: string, file: File, targetPath: string): Promise<DirentBatchResult> {
   return uploadFiles(projectId, [{ file, targetPath }]);
 }
 
@@ -35,13 +39,13 @@ export async function uploadFile(projectId: string, file: File, targetPath: stri
 export async function uploadFiles(
   projectId: string,
   items: Array<{ file: File; targetPath: string }>,
-): Promise<UploadResult> {
+): Promise<DirentBatchResult> {
   const form = new FormData();
   for (const { file, targetPath } of items) {
     const renamed = new File([file], targetPath, { type: file.type });
     form.append('file', renamed);
   }
-  return request<UploadResult>(`/projects/${projectId}/dirents`, {
+  return request<DirentBatchResult>(`/projects/${projectId}/dirents`, {
     method: 'POST',
     body: form,
     isForm: true,
@@ -54,6 +58,38 @@ export async function createFolder(projectId: string, folderPath: string): Promi
   const form = new FormData();
   form.append('file', placeholder);
   await request(`/projects/${projectId}/dirents`, { method: 'POST', body: form, isForm: true });
+}
+
+// Collection-level batch op (move/copy). Rename is just a single-source move
+// with new_name set.
+export async function moveDirents(
+  projectId: string,
+  sources: string[],
+  destination: string,
+  newName?: string,
+): Promise<DirentBatchResult> {
+  const body: BackendDirentBatchOp = {
+    op: 'move',
+    sources,
+    destination,
+    new_name: newName ?? null,
+  };
+  return request<DirentBatchResult>(`/projects/${projectId}/dirents`, {
+    method: 'PATCH',
+    body,
+  });
+}
+
+export async function copyDirents(
+  projectId: string,
+  sources: string[],
+  destination: string,
+): Promise<DirentBatchResult> {
+  const body: BackendDirentBatchOp = { op: 'copy', sources, destination };
+  return request<DirentBatchResult>(`/projects/${projectId}/dirents`, {
+    method: 'PATCH',
+    body,
+  });
 }
 
 export async function deleteDirent(projectId: string, path: string): Promise<void> {

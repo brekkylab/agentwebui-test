@@ -52,13 +52,19 @@ export interface BackendDirent {
   modified_at?: string | null;
 }
 
-export interface BackendUploadedFile { path: string; bytes: number; }
 export interface BackendFailedFile { path: string; error: string; }
-export interface BackendUploadResponse {
+
+/// Unified result shape for upload / move / copy batch operations.
+export interface BackendDirentBatchResult {
   project_id: string;
-  succeeded: BackendUploadedFile[];
+  succeeded: BackendDirent[];
   failed: BackendFailedFile[];
 }
+
+/// Tagged union for PATCH /dirents batch operations.
+export type BackendDirentBatchOp =
+  | { op: 'move'; sources: string[]; destination: string; new_name: string | null }
+  | { op: 'copy'; sources: string[]; destination: string };
 
 export type AiloyPart =
   | { type: 'text'; text: string }

@@ -19,21 +19,16 @@ pub struct Dirent {
 }
 
 #[derive(Debug, Serialize, JsonSchema)]
-pub struct UploadedFile {
-    pub path: String,
-    pub bytes: u64,
-}
-
-#[derive(Debug, Serialize, JsonSchema)]
 pub struct FailedFile {
     pub path: String,
     pub error: String,
 }
 
+/// Unified batch operation result: upload / move / copy all use this shape.
 #[derive(Debug, Serialize, JsonSchema)]
-pub struct UploadResponse {
+pub struct DirentBatchResult {
     pub project_id: Uuid,
-    pub succeeded: Vec<UploadedFile>,
+    pub succeeded: Vec<Dirent>,
     pub failed: Vec<FailedFile>,
 }
 
@@ -48,4 +43,23 @@ pub struct ListResponse {
 pub struct ListQuery {
     pub prefix: Option<String>,
     pub recursive: Option<bool>,
+}
+
+/// Tagged union for collection-level PATCH /dirents operations.
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(tag = "op", rename_all = "snake_case", deny_unknown_fields)]
+pub enum DirentBatchOp {
+    /// Move (and optionally rename) one or more items to a destination folder.
+    /// `new_name` is allowed only when `sources.len() == 1` (the rename case).
+    Move {
+        sources: Vec<String>,
+        destination: String,
+        new_name: Option<String>,
+    },
+    /// Copy one or more items into a destination folder. Name collisions get
+    /// a " copy" suffix automatically (Finder-style).
+    Copy {
+        sources: Vec<String>,
+        destination: String,
+    },
 }

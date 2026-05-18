@@ -349,3 +349,168 @@ async fn list_prefix_filter_uses_path_component_boundary() {
         "src2/ must NOT appear with prefix=src: {paths:?}"
     );
 }
+
+// ── PATCH /dirents (batch move/copy) ──────────────────────────────────────────
+
+#[tokio::test]
+async fn batch_op_rename_via_move_with_new_name() {
+    // Rename = a single-source move whose destination is the same parent
+    // and whose new_name carries the new filename. The unified move handler
+    // must accept this and produce the new dirent in the response.
+    let (state, _tmp) = make_state_with_dir().await;
+    let app = common::make_app_with_state(state);
+    common::signup(&app, "grace", "Password123!").await;
+    let token = common::login(&app, "grace", "Password123!").await;
+    let project = common::get_personal_project(&app, &token).await;
+    let pid = project["id"].as_str().unwrap();
+    upload_files(&app, &token, pid, &[("a.txt", b"hi")]).await;
+
+    let body = serde_json::json!({
+        "op": "move",
+        "sources": ["a.txt"],
+        "destination": "",
+        "new_name": "b.txt",
+    });
+    let (status, resp) = common::authed(
+        &app,
+        "PATCH",
+        &format!("/projects/{pid}/dirents"),
+        &token,
+        Some(body),
+    )
+    .await;
+    assert_eq!(status, axum::http::StatusCode::OK, "rename body: {resp}");
+    let succeeded = resp["succeeded"].as_array().unwrap();
+    assert_eq!(succeeded.len(), 1);
+    assert_eq!(succeeded[0]["path"], "b.txt");
+    assert_eq!(resp["failed"].as_array().unwrap().len(), 0);
+
+    let (gone_status, _) = get_file_raw(&app, &token, pid, "a.txt").await;
+    assert_eq!(gone_status, axum::http::StatusCode::NOT_FOUND);
+    let (here_status, here_bytes) = get_file_raw(&app, &token, pid, "b.txt").await;
+    assert_eq!(here_status, axum::http::StatusCode::OK);
+    assert_eq!(here_bytes, b"hi");
+}
+
+#[tokio::test]
+async fn batch_op_copy_applies_finder_style_suffix() {
+    // Copying into a folder that already contains the same name must NOT fail.
+    // It should auto-append " copy" (and " copy 2", " copy 3"…) Finder-style.
+    let (state, _tmp) = make_state_with_dir().await;
+    let app = common::make_app_with_state(state);
+    common::signup(&app, "henry", "Password123!").await;
+    let token = common::login(&app, "henry", "Password123!").await;
+    let project = common::get_personal_project(&app, &token).await;
+    let pid = project["id"].as_str().unwrap();
+    upload_files(&app, &token, pid, &[("note.txt", b"x")]).await;
+
+    let copy = |target: &str| {
+        let target = target.to_string();
+        let app = app.clone();
+        let token = token.clone();
+        let pid = pid.to_string();
+        async move {
+            let body = serde_json::json!({"op": "copy", "sources": [target], "destination": ""});
+            common::authed(
+                &app,
+                "PATCH",
+                &format!("/projects/{pid}/dirents"),
+                &token,
+                Some(body),
+            )
+            .await
+        }
+    };
+
+    let (s1, r1) = copy("note.txt").await;
+    assert_eq!(s1, axum::http::StatusCode::OK, "{r1}");
+    assert_eq!(r1["succeeded"][0]["path"], "note copy.txt");
+
+    let (s2, r2) = copy("note.txt").await;
+    assert_eq!(s2, axum::http::StatusCode::OK, "{r2}");
+    assert_eq!(r2["succeeded"][0]["path"], "note copy 2.txt");
+}
+
+#[tokio::test]
+async fn batch_op_move_folder_into_descendant_fails() {
+    // Moving a folder into one of its own descendants would create an
+    // unreachable cycle on disk; the handler must reject this with a clear
+    // error in `failed` (not silently 500 or actually perform the rename).
+    let (state, _tmp) = make_state_with_dir().await;
+    let app = common::make_app_with_state(state);
+    common::signup(&app, "iris", "Password123!").await;
+    let token = common::login(&app, "iris", "Password123!").await;
+    let project = common::get_personal_project(&app, &token).await;
+    let pid = project["id"].as_str().unwrap();
+    upload_files(&app, &token, pid, &[("Outer/inner/keep.txt", b"y")]).await;
+
+    let body = serde_json::json!({
+        "op": "move",
+        "sources": ["Outer"],
+        "destination": "Outer/inner",
+    });
+    let (status, resp) = common::authed(
+        &app,
+        "PATCH",
+        &format!("/projects/{pid}/dirents"),
+        &token,
+        Some(body),
+    )
+    .await;
+    assert_eq!(status, axum::http::StatusCode::OK, "{resp}");
+    assert_eq!(resp["succeeded"].as_array().unwrap().len(), 0);
+    let failed = resp["failed"].as_array().unwrap();
+    assert_eq!(failed.len(), 1, "{resp}");
+    let err = failed[0]["error"].as_str().unwrap();
+    assert!(
+        err.contains("itself") || err.contains("descendant"),
+        "expected self-into-itself error, got: {err}"
+    );
+}
+
+#[tokio::test]
+async fn batch_op_partial_success_on_name_conflict() {
+    // When some sources can be moved but others would collide, the response
+    // must split into `succeeded` and `failed` rather than aborting the batch
+    // (matches the upload partial-success contract).
+    let (state, _tmp) = make_state_with_dir().await;
+    let app = common::make_app_with_state(state);
+    common::signup(&app, "jay", "Password123!").await;
+    let token = common::login(&app, "jay", "Password123!").await;
+    let project = common::get_personal_project(&app, &token).await;
+    let pid = project["id"].as_str().unwrap();
+    upload_files(
+        &app,
+        &token,
+        pid,
+        &[("dst/blocker.txt", b"x"), ("blocker.txt", b"y"), ("free.txt", b"z")],
+    )
+    .await;
+
+    // Move both blocker.txt (will conflict with dst/blocker.txt) and free.txt (clean).
+    let body = serde_json::json!({
+        "op": "move",
+        "sources": ["blocker.txt", "free.txt"],
+        "destination": "dst",
+    });
+    let (status, resp) = common::authed(
+        &app,
+        "PATCH",
+        &format!("/projects/{pid}/dirents"),
+        &token,
+        Some(body),
+    )
+    .await;
+    assert_eq!(status, axum::http::StatusCode::OK, "{resp}");
+    let succeeded = resp["succeeded"].as_array().unwrap();
+    let failed = resp["failed"].as_array().unwrap();
+    assert_eq!(succeeded.len(), 1, "succeeded should hold free.txt: {resp}");
+    assert_eq!(succeeded[0]["path"], "dst/free.txt");
+    assert_eq!(failed.len(), 1, "failed should hold blocker.txt: {resp}");
+    assert_eq!(failed[0]["path"], "blocker.txt");
+    assert!(
+        failed[0]["error"].as_str().unwrap().contains("already exists"),
+        "expected 'already exists', got: {}",
+        failed[0]["error"]
+    );
+}
