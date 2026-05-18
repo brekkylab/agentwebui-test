@@ -536,8 +536,16 @@ async fn build_dirent(uploads_root: &Path, host: &Path) -> Result<Dirent, String
         .strip_prefix(uploads_root)
         .map(|p| p.to_string_lossy().replace('\\', "/"))
         .unwrap_or_default();
-    let kind = if meta.is_dir() { DirentKind::Dir } else { DirentKind::File };
-    let bytes = if meta.is_dir() { None } else { Some(meta.len()) };
+    let kind = if meta.is_dir() {
+        DirentKind::Dir
+    } else {
+        DirentKind::File
+    };
+    let bytes = if meta.is_dir() {
+        None
+    } else {
+        Some(meta.len())
+    };
     let modified_at = meta.modified().ok().map(DateTime::<Utc>::from);
     Ok(Dirent {
         path: rel,
@@ -577,10 +585,7 @@ async fn find_available_name(parent: &Path, base_name: &str) -> PathBuf {
         }
     }
     // Fallback (effectively unreachable)
-    parent.join(format!(
-        "{stem} copy {}{ext}",
-        Uuid::new_v4().simple()
-    ))
+    parent.join(format!("{stem} copy {}{ext}", Uuid::new_v4().simple()))
 }
 
 /// Recursive folder copy. Symlinks are skipped to prevent escape.
@@ -650,11 +655,7 @@ async fn move_one(
 }
 
 /// Single copy (folder is recursive; auto " copy" suffix on conflict).
-async fn copy_one(
-    uploads_root: &Path,
-    src_rel: &str,
-    dest_dir: &Path,
-) -> Result<Dirent, String> {
+async fn copy_one(uploads_root: &Path, src_rel: &str, dest_dir: &Path) -> Result<Dirent, String> {
     let (src_host, src_meta) = load_source(uploads_root, src_rel, dest_dir).await?;
 
     let base_name = src_host
@@ -728,7 +729,10 @@ pub async fn batch_op(
             for src in sources {
                 match move_one(&uploads_root, &src, &dest_dir, new_name.as_deref()).await {
                     Ok(d) => succeeded.push(d),
-                    Err(e) => failed.push(FailedFile { path: src, error: e }),
+                    Err(e) => failed.push(FailedFile {
+                        path: src,
+                        error: e,
+                    }),
                 }
             }
             tracing::info!(
@@ -749,7 +753,10 @@ pub async fn batch_op(
             for src in sources {
                 match copy_one(&uploads_root, &src, &dest_dir).await {
                     Ok(d) => succeeded.push(d),
-                    Err(e) => failed.push(FailedFile { path: src, error: e }),
+                    Err(e) => failed.push(FailedFile {
+                        path: src,
+                        error: e,
+                    }),
                 }
             }
             tracing::info!(

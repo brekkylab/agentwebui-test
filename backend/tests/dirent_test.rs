@@ -483,7 +483,11 @@ async fn batch_op_partial_success_on_name_conflict() {
         &app,
         &token,
         pid,
-        &[("dst/blocker.txt", b"x"), ("blocker.txt", b"y"), ("free.txt", b"z")],
+        &[
+            ("dst/blocker.txt", b"x"),
+            ("blocker.txt", b"y"),
+            ("free.txt", b"z"),
+        ],
     )
     .await;
 
@@ -509,7 +513,10 @@ async fn batch_op_partial_success_on_name_conflict() {
     assert_eq!(failed.len(), 1, "failed should hold blocker.txt: {resp}");
     assert_eq!(failed[0]["path"], "blocker.txt");
     assert!(
-        failed[0]["error"].as_str().unwrap().contains("already exists"),
+        failed[0]["error"]
+            .as_str()
+            .unwrap()
+            .contains("already exists"),
         "expected 'already exists', got: {}",
         failed[0]["error"]
     );
