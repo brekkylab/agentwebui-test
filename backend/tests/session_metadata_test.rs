@@ -329,29 +329,51 @@ async fn fork_inherits_title_and_has_zero_unread() {
     );
 }
 
-/// The streaming endpoint must NOT emit a `title` SSE event — title is delivered via WebSocket.
+/// After the first message stream, a `session_title_updated` WebSocket event must be
+/// broadcast on `AppState::ws_tx` with the correct session_id, project_id, and a non-empty title.
 #[tokio::test]
-async fn stream_does_not_emit_title_sse_event() {
+async fn first_message_stream_broadcasts_title_via_websocket() {
     dotenvy::dotenv().ok();
     common::setup_provider().await;
 
-    let (app, _repo, _state) = common::make_app_repo_state().await;
+    let (app, _repo, state) = common::make_app_repo_state().await;
 
     let username = format!("user_{}", Uuid::new_v4().simple());
     common::signup(&app, &username, "Password123!").await;
     let token = common::login(&app, &username, "Password123!").await;
     let project = common::get_personal_project(&app, &token).await;
-    let project_id = project["id"].as_str().unwrap();
-    let session_id = common::post_session_authed(&app, &token, project_id).await;
+    let project_id = project["id"].as_str().unwrap().to_string();
+    let session_id = common::post_session_authed(&app, &token, &project_id).await;
 
-    let bytes =
-        common::send_message_stream_raw(&app, session_id, "What is the capital of France?", &token)
-            .await;
-    let title_events = common::parse_sse_events_by_type(&bytes, "title");
-    assert!(
-        title_events.is_empty(),
-        "SSE stream must not emit title events (delivered via WebSocket): {title_events:?}"
-    );
+    // Subscribe before triggering the stream so no event is missed.
+    let mut ws_rx = state.ws_tx.subscribe();
+
+    common::send_message_stream_raw(&app, session_id, "What is the capital of France?", &token)
+        .await;
+
+    // Title generation is concurrent with (and outlasts) the SSE stream.
+    // Wait up to 30 s for the broadcast event.
+    let timeout = std::time::Duration::from_secs(30);
+    loop {
+        match tokio::time::timeout(timeout, ws_rx.recv()).await {
+            Ok(Ok(agent_k_backend::events::WsEvent::SessionTitleUpdated {
+                session_id: sid,
+                project_id: pid,
+                title,
+            })) => {
+                assert_eq!(sid, session_id.to_string(), "event session_id mismatch");
+                assert_eq!(pid, project_id, "event project_id mismatch");
+                assert!(!title.is_empty(), "broadcasted title must not be empty");
+                assert!(
+                    title.len() <= agent_k_backend::services::session_title::TITLE_MAX_LEN,
+                    "title exceeds TITLE_MAX_LEN: {title:?}"
+                );
+                break;
+            }
+            Ok(Err(_)) => panic!("ws_tx channel closed before title event arrived"),
+            Err(_) => panic!("no session_title_updated WS event received within {timeout:?}"),
+        }
+    }
 }
 
 /// send_message on the first message triggers fire-and-forget LLM title generation.
