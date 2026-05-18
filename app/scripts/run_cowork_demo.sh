@@ -3,6 +3,7 @@
 # Opens the printed app URL and tells you the login values.
 
 set -euo pipefail
+set -m  # job control: each background job gets its own process group
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 DEFAULT_DB="$ROOT/app/.demo/cowork-demo.db"
@@ -65,10 +66,10 @@ cleanup() {
   echo
   echo "Stopping Cowork demo..."
   if [[ -n "$APP_PID" ]] && kill -0 "$APP_PID" 2>/dev/null; then
-    kill "$APP_PID" 2>/dev/null || true
+    kill -- -"$APP_PID" 2>/dev/null || kill "$APP_PID" 2>/dev/null || true
   fi
   if [[ -n "$BACKEND_PID" ]] && kill -0 "$BACKEND_PID" 2>/dev/null; then
-    kill "$BACKEND_PID" 2>/dev/null || true
+    kill -- -"$BACKEND_PID" 2>/dev/null || kill "$BACKEND_PID" 2>/dev/null || true
   fi
   wait "$APP_PID" 2>/dev/null || true
   wait "$BACKEND_PID" 2>/dev/null || true
