@@ -21,7 +21,7 @@ const ROUTER_INSTRUCTION: &str = r#"Your objective is to choose the most appropr
 Route to `trivial` only for trivial tasks: greetings, pure noise, or refusals to act.
 Route to `rag` for direct questions that can be answered in a single turn.
 If you think searching for materials or references is necessary, always use `rag` instead of `trivial`.
-Do not hesitate to route to `deep_research` when the user expects:
+Route to `deep_research` when the user expects:
  - a structured report,
  - extensive comparison,
  - literature or research synthesis,
@@ -75,8 +75,6 @@ pub struct Plan {
     pub steps: Vec<Step>,
 }
 
-const ROUTER_MAX_RETRIES: usize = 2;
-
 pub async fn run_gpt_router_agent(user_input: impl Into<String>) -> anyhow::Result<Plan> {
     run_router_agent("openai/gpt-5.4-nano", user_input).await
 }
@@ -112,70 +110,27 @@ async fn run_router_agent(model: &str, user_input: impl Into<String>) -> anyhow:
         .response_format(ResponseFormat::json_schema(schema)?)
         .build()?;
 
-    let mut next_message =
-        Some(Message::new(Role::User).with_contents([Part::text(user_input.clone())]));
-    let mut last_err = String::from("no attempts made");
-
-    for _ in 0..ROUTER_MAX_RETRIES {
-        let msg = next_message
-            .take()
-            .expect("next_message set before each iteration");
-        let mut stream = agent.run(msg);
-        while let Some(event) = stream.next().await {
-            let _ = event?;
-        }
-        drop(stream);
-
-        let last = agent
-            .get_history()
-            .iter()
-            .rev()
-            .find(|m| m.role == Role::Assistant)
-            .ok_or_else(|| anyhow::anyhow!("router produced no assistant message"))?;
-
-        let raw = last
-            .contents
-            .iter()
-            .filter_map(|p| p.as_text())
-            .collect::<Vec<_>>()
-            .join("");
-
-        let mut it = serde_json::Deserializer::from_str(&raw).into_iter::<Plan>();
-        last_err = match it.next() {
-            Some(Ok(plan)) => {
-                if plan.steps.is_empty() {
-                    "empty steps array".to_string()
-                } else {
-                    let invalid = plan.steps.iter().enumerate().find_map(|(i, s)| {
-                        if !matches!(s.agent.as_str(), "trivial" | "rag" | "deep_research" | "cowork") {
-                            Some(format!(
-                                "invalid agent '{}' at step {}; must be one of trivial/rag/deep_research/cowork",
-                                s.agent, i
-                            ))
-                        } else {
-                            None
-                        }
-                    });
-                    if let Some(msg) = invalid {
-                        msg
-                    } else {
-                        return Ok(plan);
-                    }
-                }
-            }
-            Some(Err(e)) => format!("JSON parse failed: {e}"),
-            None => "response had no JSON object".to_string(),
-        };
-
-        next_message = Some(Message::new(Role::User).with_contents([Part::text(format!(
-            "Your previous response is not valid JSON. Respond again.\n\n{last_err}."
-        ))]));
+    let msg = Message::new(Role::User).with_contents([Part::text(user_input)]);
+    let mut stream = agent.run(msg);
+    while let Some(event) = stream.next().await {
+        let _ = event?;
     }
-    Ok(Plan {
-        steps: vec![Step {
-            agent: "cowork".to_string(),
-            input: user_input,
-            reason: Some(format!("fallback: {last_err}")),
-        }],
-    })
+    drop(stream);
+
+    let last = agent
+        .get_history()
+        .iter()
+        .rev()
+        .find(|m| m.role == Role::Assistant)
+        .ok_or_else(|| anyhow::anyhow!("router produced no assistant message"))?;
+
+    let raw = last
+        .contents
+        .iter()
+        .filter_map(|p| p.as_text())
+        .collect::<Vec<_>>()
+        .join("");
+
+    let plan: Plan = serde_json::from_str(&raw)?;
+    Ok(plan)
 }
