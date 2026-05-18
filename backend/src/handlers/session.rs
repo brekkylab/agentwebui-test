@@ -29,12 +29,12 @@ use crate::{
 
 const DEFAULT_MODEL: &str = "openai/gpt-5.4-mini";
 
-fn sandbox_name_for(id: &Uuid) -> String {
+pub(crate) fn sandbox_name_for(id: &Uuid) -> String {
     let s = id.simple().to_string();
     format!("session-{}", &s[..12])
 }
 
-async fn build_sandbox(
+pub(crate) async fn build_sandbox(
     state: &Arc<AppState>,
     project_id: Uuid,
     session_id: Uuid,
@@ -64,7 +64,7 @@ async fn build_sandbox(
     Sandbox::new(cfg).await.map_err(|e| e.to_string())
 }
 
-async fn build_agent(sandbox: Sandbox) -> Result<Agent, String> {
+pub(crate) async fn build_agent(sandbox: Sandbox) -> Result<Agent, String> {
     let sw_card = AgentCard {
         name: "speedwagon".into(),
         description: "Search the knowledge base for answers. \

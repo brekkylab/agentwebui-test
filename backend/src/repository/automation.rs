@@ -532,6 +532,91 @@ impl SqliteRepository {
         })
     }
 
+    /// Atomically create a fresh automation session, the queued run referencing
+    /// it, and the canonical `triggered` + `queued` events — all in one tx so
+    /// partial failure can't leave an orphan session or a run without its
+    /// initial event log. Used by manual run creation and webhook firing.
+    pub async fn create_automation_run_with_session(
+        &self,
+        automation_id: Uuid,
+        project_id: Uuid,
+        creator_id: Uuid,
+        trigger_id: Option<Uuid>,
+        scheduled_for: DateTime<Utc>,
+        previous_run_id: Option<Uuid>,
+        triggered_payload: Option<&serde_json::Value>,
+    ) -> RepositoryResult<DbAutomationRun> {
+        let mut tx = self.pool.begin().await?;
+        let now = Self::now_string();
+        let scheduled_s = Self::ts_string(scheduled_for);
+
+        let session_id = Uuid::new_v4();
+        sqlx::query(
+            "INSERT INTO sessions (id, project_id, creator_id, share_mode, origin, created_at, updated_at) \
+             VALUES (?, ?, ?, 'private', 'automation', ?, ?)",
+        )
+        .bind(session_id.to_string())
+        .bind(project_id.to_string())
+        .bind(creator_id.to_string())
+        .bind(&now)
+        .bind(&now)
+        .execute(&mut *tx)
+        .await?;
+
+        let run_id = Uuid::new_v4();
+        sqlx::query(
+            "INSERT INTO automation_runs \
+               (id, automation_id, trigger_id, session_id, status, scheduled_for, lease_until, previous_run_id, created_at, updated_at) \
+             VALUES (?, ?, ?, ?, 'queued', ?, NULL, ?, ?, ?)",
+        )
+        .bind(run_id.to_string())
+        .bind(automation_id.to_string())
+        .bind(trigger_id.map(|u| u.to_string()))
+        .bind(session_id.to_string())
+        .bind(&scheduled_s)
+        .bind(previous_run_id.map(|u| u.to_string()))
+        .bind(&now)
+        .bind(&now)
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| Self::map_db_error(e, "automation_runs.session_id"))?;
+
+        let triggered_str = triggered_payload.map(serde_json::to_string).transpose()?;
+        sqlx::query(
+            "INSERT INTO automation_run_events (run_id, ts, kind, attempt, payload) \
+             VALUES (?, ?, 'triggered', 1, ?)",
+        )
+        .bind(run_id.to_string())
+        .bind(&now)
+        .bind(&triggered_str)
+        .execute(&mut *tx)
+        .await?;
+
+        sqlx::query(
+            "INSERT INTO automation_run_events (run_id, ts, kind, attempt, payload) \
+             VALUES (?, ?, 'queued', 1, NULL)",
+        )
+        .bind(run_id.to_string())
+        .bind(&now)
+        .execute(&mut *tx)
+        .await?;
+
+        tx.commit().await?;
+
+        Ok(DbAutomationRun {
+            id: run_id,
+            automation_id,
+            trigger_id,
+            session_id,
+            status: RunStatus::Queued,
+            scheduled_for,
+            lease_until: None,
+            previous_run_id,
+            created_at: Self::parse_timestamp(now.clone(), "automation_runs.created_at")?,
+            updated_at: Self::parse_timestamp(now, "automation_runs.updated_at")?,
+        })
+    }
+
     pub async fn get_run(&self, id: Uuid) -> RepositoryResult<Option<DbAutomationRun>> {
         let row = sqlx::query(
             "SELECT id, automation_id, trigger_id, session_id, status, scheduled_for, lease_until, previous_run_id, created_at, updated_at \

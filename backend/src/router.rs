@@ -125,7 +125,7 @@ pub fn get_router(state: Arc<AppState>) -> ApiRouter {
         )
         .api_route(
             "/automations/{automation_id}/runs",
-            get(handlers::list_runs),
+            get(handlers::list_runs).post(handlers::create_run),
         )
         .api_route(
             "/automations/{automation_id}/runs/{run_id}",

@@ -8,7 +8,7 @@ use agent_k::{
     },
     knowledge_base::Store,
 };
-use agent_k_backend::{auth, repository, router, state::AppState};
+use agent_k_backend::{auth, repository, router, state::AppState, worker};
 use aide::{
     axum::ApiRouter,
     openapi::{Info, OpenApi},
@@ -118,6 +118,13 @@ async fn run_server() -> std::io::Result<()> {
     tracing::info!("data root: {}", data_root.display());
 
     let app_state = Arc::new(AppState::new(repo, store, jwt, data_root));
+
+    let worker_count = std::env::var("AGENT_K_WORKER_COUNT")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(2usize);
+    worker::spawn_workers(app_state.clone(), worker_count);
+
     let app = router::get_router(app_state)
         .finish_api(&mut openapi)
         .merge(

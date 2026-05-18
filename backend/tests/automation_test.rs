@@ -323,6 +323,48 @@ async fn list_triggers_and_delete() {
 // ─── runs / events ──────────────────────────────────────────────────────────
 
 #[tokio::test]
+async fn manual_run_queues_session_and_initial_events() {
+    let repo = common::make_repo().await;
+    let app = common::make_app_with_repo(repo);
+    let (token, pid) = signup_and_personal_project(&app, "alice").await;
+    let auto = create_automation(&app, &token, &pid, "manual", vec!["hi", "bye"]).await;
+    let auto_id = auto["id"].as_str().unwrap().to_string();
+
+    let (status, body) = common::authed(
+        &app,
+        "POST",
+        &format!("/automations/{auto_id}/runs"),
+        &token,
+        Some(json!({})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "create run: {body}");
+    assert_eq!(body["status"], "queued");
+    assert!(body["session_id"].is_string(), "session_id present");
+    assert!(body["trigger_id"].is_null(), "manual run has no trigger");
+    let run_id = body["id"].as_str().unwrap().to_string();
+
+    // events: triggered + queued recorded synchronously by the handler.
+    let (status, body) = common::authed(
+        &app,
+        "GET",
+        &format!("/automations/{auto_id}/runs/{run_id}/events"),
+        &token,
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let kinds: Vec<&str> = body["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|e| e["kind"].as_str().unwrap())
+        .collect();
+    assert!(kinds.contains(&"triggered"), "kinds: {kinds:?}");
+    assert!(kinds.contains(&"queued"), "kinds: {kinds:?}");
+}
+
+#[tokio::test]
 async fn list_runs_empty() {
     let repo = common::make_repo().await;
     let app = common::make_app_with_repo(repo);

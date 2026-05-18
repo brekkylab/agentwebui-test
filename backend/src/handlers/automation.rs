@@ -5,7 +5,9 @@ use axum::{
     extract::{Extension, Path, Query, State},
     http::StatusCode,
 };
+use chrono::Utc;
 use serde::Deserialize;
+use serde_json::json;
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
@@ -270,6 +272,39 @@ pub struct RunListQuery {
     pub limit: Option<i64>,
     #[serde(default)]
     pub offset: Option<i64>,
+}
+
+/// POST /automations/{automation_id}/runs — manual run trigger.
+/// Atomically creates a new automation session, the queued run, and the
+/// triggered/queued events. The worker picks it up asynchronously.
+pub async fn create_run(
+    State(state): State<Arc<AppState>>,
+    Extension(auth_user): Extension<AuthUser>,
+    Path(automation_id): Path<Uuid>,
+) -> ApiResult<(StatusCode, Json<RunResponse>)> {
+    let automation = require_automation_access(&state, auth_user.id, automation_id).await?;
+
+    let triggered_payload = json!({
+        "source": "manual",
+        "actor_user_id": auth_user.id,
+    });
+
+    let run = state
+        .repository
+        .create_automation_run_with_session(
+            automation_id,
+            automation.project_id,
+            auth_user.id,
+            None,
+            Utc::now(),
+            None,
+            Some(&triggered_payload),
+        )
+        .await
+        .map_err(|e| AppError::internal(e.to_string()))?;
+
+    tracing::info!(run = %run.id, automation = %automation_id, "manual run queued");
+    Ok((StatusCode::CREATED, Json(run.into())))
 }
 
 /// GET /automations/{automation_id}/runs?limit=&offset=
