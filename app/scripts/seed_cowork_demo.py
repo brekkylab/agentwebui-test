@@ -128,14 +128,20 @@ def write_uploads(data_root: Path) -> None:
 
 
 def seed_rows(db: Path) -> None:
+    # Fix the base time so all timestamps in this seed run are consistent.
+    base = datetime.now(timezone.utc)
+    def ts(offset: int = 0) -> str:
+        return (base + timedelta(seconds=offset)).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+
     conn = sqlite3.connect(db)
     conn.execute("PRAGMA foreign_keys = ON")
     olive_hash = conn.execute("SELECT password_hash FROM users WHERE username = ?", (DEMO_USERNAME,)).fetchone()[0]
-    created = now()
+    created = ts()
     users = [
         (user["id"], user["username"], olive_hash, user["role"], user["display_name"], 1, created, created)
         for user in DEMO_USERS
     ]
+    conn.execute("DELETE FROM session_reads")
     conn.execute("DELETE FROM session_messages")
     conn.execute("DELETE FROM sessions")
     conn.execute("DELETE FROM project_members")
@@ -146,28 +152,52 @@ def seed_rows(db: Path) -> None:
         users,
     )
     projects = [
-        (PROJECT_KLIENT, "KlientCo Q2 분석", "시장 분석 + Q2 보드 보고 자료 정리", OLIVE_ID, now(1), now(1)),
-        (PROJECT_GTM, "GTM 재설계 — 2026 H2", "메시지, ICP, launch sequence를 다시 묶는 team project", MILO_ID, now(2), now(2)),
+        (PROJECT_KLIENT, "KlientCo Q2 분석", "시장 분석 + Q2 보드 보고 자료 정리", OLIVE_ID, ts(1), ts(1)),
+        (PROJECT_GTM, "GTM 재설계 — 2026 H2", "메시지, ICP, launch sequence를 다시 묶는 team project", MILO_ID, ts(2), ts(2)),
     ]
     conn.executemany("INSERT INTO projects (id, name, description, owner_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)", projects)
     members = [
-        (PROJECT_KLIENT, MILO_ID, now(3)),
-        (PROJECT_KLIENT, OWEN_ID, now(4)),
-        (PROJECT_GTM, OLIVE_ID, now(5)),
+        (PROJECT_KLIENT, MILO_ID, ts(3)),
+        (PROJECT_KLIENT, OWEN_ID, ts(4)),
+        (PROJECT_GTM, OLIVE_ID, ts(5)),
     ]
     conn.executemany("INSERT INTO project_members (project_id, user_id, added_at) VALUES (?, ?, ?)", members)
+
+    # last_message_at and last_message_snippet are derived from the last message per session.
+    # Offsets match the message timestamps below so the values are consistent.
     sessions = [
-        (SESSION_Q2, PROJECT_KLIENT, OLIVE_ID, "shared_chat", now(10), now(20)),
-        (SESSION_DECISION, PROJECT_KLIENT, OLIVE_ID, "shared_chat", now(11), now(21)),
-        (SESSION_GTM, PROJECT_GTM, MILO_ID, "shared_chat", now(12), now(22)),
+        (
+            SESSION_Q2, PROJECT_KLIENT, OLIVE_ID, "shared_chat",
+            "Q2 시장 분석 시작점",
+            ts(31),
+            "수요 측 갱신 압박부터 보고, 경쟁사 스캔과 교차 검증하면 좋을 것 같아요. SMB 갱신 사이클이 18% 단축됐다는 신호가 가장 강합니다.",
+            ts(10), ts(31),
+        ),
+        (
+            SESSION_DECISION, PROJECT_KLIENT, OLIVE_ID, "shared_chat",
+            "보드 메모 결정 누적",
+            ts(33),
+            "현재 결정 스레드는 SMB retention을 최우선으로 두는 방향입니다. 메모 v3에 'market evidence for SMB retention priority' 슬롯을 채울 준비가 됐어요.",
+            ts(11), ts(33),
+        ),
+        (
+            SESSION_GTM, PROJECT_GTM, MILO_ID, "shared_chat",
+            "H2 ICP 메시지 순서 검토",
+            ts(34),
+            "H2 launch sequence에서 ICP별 메시지 순서를 다시 보고 싶어.",
+            ts(12), ts(34),
+        ),
     ]
-    conn.executemany("INSERT INTO sessions (id, project_id, creator_id, share_mode, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)", sessions)
+    conn.executemany(
+        "INSERT INTO sessions (id, project_id, creator_id, share_mode, title, last_message_at, last_message_snippet, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        sessions,
+    )
     messages = [
-        (SESSION_Q2, message("user", "Q2 시장 보고를 어디서 시작하면 좋을까? Files → Market research에 자료가 정리되어 있어."), now(30)),
-        (SESSION_Q2, message("assistant", "수요 측 갱신 압박부터 보고, 경쟁사 스캔과 교차 검증하면 좋을 것 같아요. SMB 갱신 사이클이 18% 단축됐다는 신호가 가장 강합니다."), now(31)),
-        (SESSION_DECISION, message("user", "오늘 결정된 내용을 board memo에 붙일 수 있게 누적해줘."), now(32)),
-        (SESSION_DECISION, message("assistant", "현재 결정 스레드는 SMB retention을 최우선으로 두는 방향입니다. 메모 v3에 'market evidence for SMB retention priority' 슬롯을 채울 준비가 됐어요."), now(33)),
-        (SESSION_GTM, message("user", "H2 launch sequence에서 ICP별 메시지 순서를 다시 보고 싶어."), now(34)),
+        (SESSION_Q2, message("user", "Q2 시장 보고를 어디서 시작하면 좋을까? Files → Market research에 자료가 정리되어 있어."), ts(30)),
+        (SESSION_Q2, message("assistant", "수요 측 갱신 압박부터 보고, 경쟁사 스캔과 교차 검증하면 좋을 것 같아요. SMB 갱신 사이클이 18% 단축됐다는 신호가 가장 강합니다."), ts(31)),
+        (SESSION_DECISION, message("user", "오늘 결정된 내용을 board memo에 붙일 수 있게 누적해줘."), ts(32)),
+        (SESSION_DECISION, message("assistant", "현재 결정 스레드는 SMB retention을 최우선으로 두는 방향입니다. 메모 v3에 'market evidence for SMB retention priority' 슬롯을 채울 준비가 됐어요."), ts(33)),
+        (SESSION_GTM, message("user", "H2 launch sequence에서 ICP별 메시지 순서를 다시 보고 싶어."), ts(34)),
     ]
     conn.executemany("INSERT INTO session_messages (session_id, message_json, created_at) VALUES (?, ?, ?)", messages)
     conn.commit()

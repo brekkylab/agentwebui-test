@@ -342,6 +342,17 @@ pub async fn send_message_stream(
     content: &str,
     token: &str,
 ) -> Vec<serde_json::Value> {
+    let bytes = send_message_stream_raw(app, id, content, token).await;
+    parse_sse_message_events(&bytes)
+}
+
+/// Like `send_message_stream` but returns the raw SSE bytes for custom event parsing.
+pub async fn send_message_stream_raw(
+    app: &axum::Router,
+    id: uuid::Uuid,
+    content: &str,
+    token: &str,
+) -> bytes::Bytes {
     let body = serde_json::json!({ "content": content }).to_string();
     let req = Request::builder()
         .method("POST")
@@ -360,10 +371,18 @@ pub async fn send_message_stream(
         "POST /sessions/{id}/messages/stream failed: {}",
         String::from_utf8_lossy(&bytes)
     );
-    parse_sse_message_events(&bytes)
+    bytes
 }
 
 pub fn parse_sse_message_events(body: &[u8]) -> Vec<serde_json::Value> {
+    parse_sse_events_by_type(body, "message")
+        .into_iter()
+        .filter_map(|data| serde_json::from_str(&data).ok())
+        .collect()
+}
+
+/// Return the raw data strings for all SSE frames of the given event type.
+pub fn parse_sse_events_by_type(body: &[u8], target_event: &str) -> Vec<String> {
     String::from_utf8_lossy(body)
         .split("\n\n")
         .filter(|s| !s.trim().is_empty())
@@ -377,10 +396,11 @@ pub fn parse_sse_message_events(body: &[u8]) -> Vec<serde_json::Value> {
                     data_line = v;
                 }
             }
-            if event_type != "message" {
-                return None;
+            if event_type == target_event {
+                Some(data_line.to_string())
+            } else {
+                None
             }
-            serde_json::from_str(data_line).ok()
         })
         .collect()
 }

@@ -7,13 +7,15 @@ import { getProject, listMembers } from '@/api/projects';
 import { createSession, deleteSession, listSessions } from '@/api/sessions';
 import { listDirents } from '@/api/dirents';
 import { Icon } from '@/components/Icon';
-import { ActivityRow, AvatarStack, EmptyState, InfoRow, IntentIcon, SectionLabel, SharePill, compactTime } from '@/components/uiPrimitives';
+import { ActivityRow, AvatarStack, EmptyState, InfoRow, IntentIcon, SectionLabel, SharePill } from '@/components/uiPrimitives';
+import { timeAgo } from '@/lib/timeAgo';
 import { useToastStore } from '@/components/Toast';
 import { ConfirmDialog } from '@/components/ConfirmDialog';
 import { SessionCardMenu } from '@/components/SessionCardMenu';
 import { useAuthStore } from '@/stores/auth';
 import { canAdministerSession } from '@/lib/permissions';
 import { ApiError } from '@/api/client';
+import { SessionTitleText } from '@/components/SessionTitleText';
 import type { Session } from '@/domain/types';
 
 export const Route = createFileRoute('/_app/projects/$projectId/')({
@@ -159,23 +161,38 @@ function SessionCard({
   onOpen: () => void;
   onRequestDelete: () => void;
 }) {
+  const isUnread = session.unreadCount > 0;
+  const timeLabel = session.lastMessageAt ? timeAgo(session.lastMessageAt) : null;
+
   return (
-    <div className="cw-session-card" onClick={onOpen} role="button" tabIndex={0} style={{ cursor: 'pointer' }}>
+    <div
+      className={`cw-session-card${isUnread ? ' is-unread' : ''}`}
+      onClick={onOpen}
+      role="button"
+      tabIndex={0}
+      style={{ cursor: 'pointer' }}
+    >
       <div className="cw-session-card-head">
         <span className="cw-session-card-title">
           <IntentIcon intent={session.intent} force />
-          <span>{session.title}</span>
+          <SessionTitleText title={session.title} />
         </span>
-        <span className="cw-session-right" style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+        <span className="cw-session-right">
+          {isUnread && (
+            <span className="cw-unread-badge" aria-label={`unread ${session.unreadCount}`}>
+              <span className="dot" />
+              <span className="n">{session.unreadCount}</span>
+            </span>
+          )}
           <SharePill mode={session.shareMode} compact />
           {canDelete && <SessionCardMenu onDelete={onRequestDelete} />}
         </span>
       </div>
-      <p className="cw-session-last">
-        에이전트와 대화를 시작하세요.
-      </p>
+      {session.lastMessageSnippet && (
+        <p className="cw-session-last">{session.lastMessageSnippet}</p>
+      )}
       <div className="cw-session-card-footer">
-        <span className="cw-card-time">{compactTime(session.updatedAt)}</span>
+        {timeLabel && <span className="cw-card-time">{timeLabel}</span>}
       </div>
     </div>
   );

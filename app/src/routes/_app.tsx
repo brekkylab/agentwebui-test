@@ -1,10 +1,12 @@
 import { useEffect } from 'react';
 import { Outlet, createFileRoute, redirect } from '@tanstack/react-router';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { getToken } from '@/api/client';
 import { getMe } from '@/api/auth';
 import { useAuthStore } from '@/stores/auth';
 import { Sidebar } from '@/components/layout/Sidebar';
+import { appWs } from '@/api/ws';
+import type { Session } from '@/domain/types';
 
 export const Route = createFileRoute('/_app')({
   beforeLoad: () => {
@@ -15,6 +17,7 @@ export const Route = createFileRoute('/_app')({
 
 function AppShell() {
   const setCurrentUser = useAuthStore((s) => s.setCurrentUser);
+  const queryClient = useQueryClient();
   const me = useQuery({
     queryKey: ['me'],
     queryFn: getMe,
@@ -24,6 +27,25 @@ function AppShell() {
   useEffect(() => {
     if (me.data) setCurrentUser(me.data);
   }, [me.data, setCurrentUser]);
+
+  useEffect(() => {
+    const token = getToken();
+    if (!token) return;
+    appWs.connect(token);
+    const unsub = appWs.subscribe((event) => {
+      if (event.type === 'session_title_updated') {
+        queryClient.setQueryData<Session | undefined>(
+          ['session', event.session_id],
+          (old) => (old ? { ...old, title: event.title } : old),
+        );
+        void queryClient.invalidateQueries({ queryKey: ['sessions', event.project_id] });
+      }
+    });
+    return () => {
+      unsub();
+      appWs.disconnect();
+    };
+  }, [queryClient]);
 
   return (
     <div className="cw-app-shell">

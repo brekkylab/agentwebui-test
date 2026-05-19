@@ -16,6 +16,7 @@ import { ConfirmDialog } from '@/components/ConfirmDialog';
 import { SessionCardMenu } from '@/components/SessionCardMenu';
 import { canAdministerSession } from '@/lib/permissions';
 import { ApiError } from '@/api/client';
+import { SessionTitleText } from '@/components/SessionTitleText';
 import type { Session } from '@/domain/types';
 
 export function Sidebar() {
@@ -170,14 +171,24 @@ export function Sidebar() {
               return (
                 <div
                   key={session.id}
-                  className={`cw-session-row ${session.id === activeSessionId ? 'is-active' : ''}`}
+                  className={[
+                    'cw-session-row',
+                    session.id === activeSessionId ? 'is-active' : '',
+                    session.unreadCount > 0 ? 'is-unread' : '',
+                  ].filter(Boolean).join(' ')}
                   onClick={() => openSession(activeProject.id, session.id)}
                   role="button"
                   tabIndex={0}
                   style={{ cursor: 'pointer' }}
                 >
-                  <IconPocket tone="trust" icon="message-square" compact />
-                  <span>{session.title}</span>
+                  {session.unreadCount > 0 ? (
+                    <span className="cw-unread-badge" aria-label={`unread ${session.unreadCount}`}>
+                      <span className="n">{session.unreadCount}</span>
+                    </span>
+                  ) : (
+                    <IconPocket tone="trust" icon="message-square" compact />
+                  )}
+                  <SessionTitleText title={session.title} />
                   {session.isAutoAppend && <span className="auto-dot">●</span>}
                   {canDelete && (
                     <span style={{ marginLeft: 'auto' }}>

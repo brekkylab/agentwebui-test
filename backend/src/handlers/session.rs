@@ -24,6 +24,7 @@ use crate::{
         SessionResponse, UpdateSessionRequest,
     },
     repository::SessionAccess,
+    services::session_title::generate_session_title,
     state::AppState,
 };
 
@@ -176,7 +177,10 @@ pub async fn create_session(
     state.insert_agent(session.id, agent);
 
     tracing::info!(id = %session.id, sandbox = %sandbox_name, "session created");
-    Ok((StatusCode::CREATED, Json(SessionResponse::from(session))))
+    Ok((
+        StatusCode::CREATED,
+        Json(SessionResponse::from_db(session, 0)),
+    ))
 }
 
 /// GET /projects/{project_id}/sessions
@@ -200,9 +204,21 @@ pub async fn list_sessions(
         .await
         .map_err(|e| AppError::internal(e.to_string()))?;
 
-    Ok(Json(SessionListResponse {
-        items: sessions.into_iter().map(SessionResponse::from).collect(),
-    }))
+    let session_ids: Vec<Uuid> = sessions.iter().map(|s| s.id).collect();
+    let unread_map = state
+        .repository
+        .count_unread_batch_for_user(&session_ids, auth_user.id)
+        .await
+        .map_err(|e| AppError::internal(e.to_string()))?;
+    let items: Vec<SessionResponse> = sessions
+        .into_iter()
+        .map(|s| {
+            let unread = unread_map.get(&s.id).copied().unwrap_or(0);
+            SessionResponse::from_db(s, unread)
+        })
+        .collect();
+
+    Ok(Json(SessionListResponse { items }))
 }
 
 /// GET /sessions/{session_id}
@@ -218,7 +234,13 @@ pub async fn get_session(
         .map_err(|e| AppError::internal(e.to_string()))?
         .ok_or_else(|| AppError::not_found("session not found or access denied"))?;
 
-    Ok(Json(SessionResponse::from(session)))
+    let unread = state
+        .repository
+        .count_session_unread(session_id, auth_user.id)
+        .await
+        .map_err(|e| AppError::internal(e.to_string()))?;
+
+    Ok(Json(SessionResponse::from_db(session, unread)))
 }
 
 /// PATCH /sessions/{session_id} — share_mode change (creator or project owner)
@@ -245,7 +267,13 @@ pub async fn update_session(
         .await
         .map_err(|e| AppError::internal(e.to_string()))?;
 
-    Ok(Json(SessionResponse::from(updated)))
+    let unread = state
+        .repository
+        .count_session_unread(session_id, auth_user.id)
+        .await
+        .map_err(|e| AppError::internal(e.to_string()))?;
+
+    Ok(Json(SessionResponse::from_db(updated, unread)))
 }
 
 pub(crate) async fn cleanup_session_resources(state: &Arc<AppState>, session_id: Uuid) {
@@ -317,6 +345,12 @@ pub async fn fork_session(
         .await
         .map_err(|e| AppError::internal(e.to_string()))?;
 
+    // Mark the forked session as fully read for the creator
+    let _ = state
+        .repository
+        .mark_session_read(new_id, auth_user.id)
+        .await;
+
     let source_cfg = SandboxConfig {
         name: Some(sandbox_name_for(&source_session_id)),
         persist: true,
@@ -348,7 +382,7 @@ pub async fn fork_session(
             );
             Ok((
                 StatusCode::CREATED,
-                Json(SessionResponse::from(new_session)),
+                Json(SessionResponse::from_db(new_session, 0)),
             ))
         }
         Err(e) => {
@@ -379,6 +413,12 @@ pub async fn get_message_history(
         .get_messages(session_id)
         .await
         .map_err(|e| AppError::internal(e.to_string()))?;
+
+    // Auto-mark all messages as read for this user
+    let _ = state
+        .repository
+        .mark_session_read(session_id, auth_user.id)
+        .await;
 
     Ok(Json(messages))
 }
@@ -439,6 +479,30 @@ pub async fn send_message(
         return Err(AppError::forbidden("read-only access to this session"));
     }
 
+    let need_title = session.title.is_none();
+    let project_id = session.project_id;
+
+    // Spawn title generation immediately — runs concurrently with the agent run
+    if need_title {
+        let repo_title = state.repository.clone();
+        let ws_tx = state.ws_tx.clone();
+        let first_msg = payload.content.clone();
+        tokio::spawn(async move {
+            let title = generate_session_title(&first_msg).await;
+            if repo_title
+                .set_session_title(session_id, &title)
+                .await
+                .is_ok()
+            {
+                let _ = ws_tx.send(crate::events::WsEvent::SessionTitleUpdated {
+                    session_id: session_id.to_string(),
+                    project_id: project_id.to_string(),
+                    title,
+                });
+            }
+        });
+    }
+
     let agent_arc = resolve_agent_for(&state, session.id, session.project_id).await?;
 
     let mut agent = agent_arc
@@ -461,6 +525,11 @@ pub async fn send_message(
         .append_messages(session_id, &new_messages)
         .await
         .map_err(|e| AppError::internal(e.to_string()))?;
+
+    let _ = state
+        .repository
+        .mark_session_read(session_id, auth_user.id)
+        .await;
 
     Ok(Json(outputs))
 }
@@ -497,6 +566,33 @@ pub async fn send_message_stream(
     let prev_len = guard.get_history().len();
     let repo = state.repository.clone();
     let content = payload.content;
+    let need_title = session.title.is_none();
+    let sender_id = auth_user.id;
+    let project_id = session.project_id;
+
+    // Spawn title generation immediately — runs concurrently with the agent stream
+    if need_title {
+        let repo_title = repo.clone();
+        let ws_tx = state.ws_tx.clone();
+        let first_msg = content.clone();
+        tokio::spawn(async move {
+            tracing::info!("starting title generation");
+            let title = generate_session_title(&first_msg).await;
+            tracing::info!("title generation finished");
+            if repo_title
+                .set_session_title(session_id, &title)
+                .await
+                .is_ok()
+            {
+                tracing::info!("send title via websocket");
+                let _ = ws_tx.send(crate::events::WsEvent::SessionTitleUpdated {
+                    session_id: session_id.to_string(),
+                    project_id: project_id.to_string(),
+                    title,
+                });
+            }
+        });
+    }
 
     let stream = async_stream::stream! {
         let mut agent = guard;  // OwnedMutexGuard moved in — lock held for stream lifetime
@@ -536,6 +632,10 @@ pub async fn send_message_stream(
             tracing::error!(%session_id, "failed to persist messages: {e}");
         }
 
+        // Auto-mark sender as having read
+        let _ = repo.mark_session_read(session_id, sender_id).await;
+
+        tracing::info!("message stream finished");
         yield Ok(Event::default().event("done").data("[DONE]"));
     };
 

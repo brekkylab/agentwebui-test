@@ -115,6 +115,11 @@ pub fn get_router(state: Arc<AppState>) -> ApiRouter {
             get(handlers::get_document).delete(handlers::purge_document),
         );
 
+    // /ws uses plain axum routing: WebSocketUpgrade doesn't implement aide's OperationInput.
+    let ws_route = ApiRouter::new()
+        .route("/ws", axum::routing::get(handlers::ws_handler))
+        .with_state(state.clone());
+
     ApiRouter::new()
         .merge(auth_routes)
         .merge(me_routes)
@@ -122,5 +127,6 @@ pub fn get_router(state: Arc<AppState>) -> ApiRouter {
         .merge(project_routes)
         .merge(session_routes)
         .merge(document_routes)
+        .merge(ws_route)
         .with_state(state)
 }

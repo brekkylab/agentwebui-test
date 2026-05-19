@@ -48,6 +48,9 @@ pub struct DbSession {
     pub project_id: Uuid,
     pub creator_id: Uuid,
     pub share_mode: ShareMode,
+    pub title: Option<String>,
+    pub last_message_at: Option<DateTime<Utc>>,
+    pub last_message_snippet: Option<String>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -60,6 +63,16 @@ impl SqliteRepository {
                 "invalid share_mode: {share_mode_str}"
             ))
         })?;
+
+        let last_message_at = row
+            .try_get::<Option<String>, _>("last_message_at")
+            .unwrap_or(None)
+            .and_then(|s| {
+                DateTime::parse_from_rfc3339(&s)
+                    .ok()
+                    .map(|dt| dt.with_timezone(&Utc))
+            });
+
         Ok(DbSession {
             id: Self::parse_uuid(row.get::<String, _>("id"), "sessions.id")?,
             project_id: Self::parse_uuid(
@@ -71,6 +84,11 @@ impl SqliteRepository {
                 "sessions.creator_id",
             )?,
             share_mode,
+            title: row.try_get::<Option<String>, _>("title").unwrap_or(None),
+            last_message_at,
+            last_message_snippet: row
+                .try_get::<Option<String>, _>("last_message_snippet")
+                .unwrap_or(None),
             created_at: Self::parse_timestamp(
                 row.get::<String, _>("created_at"),
                 "sessions.created_at",
@@ -106,6 +124,9 @@ impl SqliteRepository {
             project_id,
             creator_id,
             share_mode: ShareMode::Private,
+            title: None,
+            last_message_at: None,
+            last_message_snippet: None,
             created_at: Self::parse_timestamp(now.clone(), "sessions.created_at")?,
             updated_at: Self::parse_timestamp(now, "sessions.updated_at")?,
         })
@@ -113,7 +134,8 @@ impl SqliteRepository {
 
     pub async fn get_session(&self, id: Uuid) -> RepositoryResult<Option<DbSession>> {
         let row = sqlx::query(
-            "SELECT id, project_id, creator_id, share_mode, created_at, updated_at \
+            "SELECT id, project_id, creator_id, share_mode, title, last_message_at, \
+                    last_message_snippet, created_at, updated_at \
              FROM sessions WHERE id = ?;",
         )
         .bind(id.to_string())
@@ -133,7 +155,8 @@ impl SqliteRepository {
         let sid = session_id.to_string();
 
         let row = sqlx::query(
-            "SELECT s.id, s.project_id, s.creator_id, s.share_mode, s.created_at, s.updated_at,
+            "SELECT s.id, s.project_id, s.creator_id, s.share_mode, s.title, \
+                    s.last_message_at, s.last_message_snippet, s.created_at, s.updated_at,
                     CASE
                         WHEN p.owner_id = ?1 THEN 'admin'
                         WHEN s.creator_id = ?1 AND pm.user_id IS NOT NULL THEN 'admin'
@@ -176,7 +199,8 @@ impl SqliteRepository {
         let uid = requesting_user_id.to_string();
 
         let rows = sqlx::query(
-            "SELECT s.id, s.project_id, s.creator_id, s.share_mode, s.created_at, s.updated_at
+            "SELECT s.id, s.project_id, s.creator_id, s.share_mode, s.title, \
+                    s.last_message_at, s.last_message_snippet, s.created_at, s.updated_at
              FROM sessions s
              JOIN projects p ON p.id = s.project_id
              WHERE s.project_id = ?1
@@ -188,7 +212,7 @@ impl SqliteRepository {
                        AND (s.creator_id = ?2 OR s.share_mode != 'private')
                    )
                )
-             ORDER BY s.created_at DESC",
+             ORDER BY COALESCE(s.last_message_at, s.created_at) DESC",
         )
         .bind(&pid)
         .bind(&uid)
@@ -229,7 +253,8 @@ impl SqliteRepository {
         project_id: Uuid,
     ) -> RepositoryResult<Vec<DbSession>> {
         let rows = sqlx::query(
-            "SELECT id, project_id, creator_id, share_mode, created_at, updated_at \
+            "SELECT id, project_id, creator_id, share_mode, title, last_message_at, \
+                    created_at, updated_at \
              FROM sessions WHERE project_id = ? \
              ORDER BY created_at DESC",
         )
@@ -256,12 +281,14 @@ impl SqliteRepository {
         let mut tx = self.pool.begin().await?;
 
         sqlx::query(
-            "INSERT INTO sessions (id, project_id, creator_id, share_mode, created_at, updated_at) \
-             VALUES (?, ?, ?, 'private', ?, ?);",
+            "INSERT INTO sessions (id, project_id, creator_id, share_mode, title, \
+                                   created_at, updated_at) \
+             VALUES (?, ?, ?, 'private', ?, ?, ?);",
         )
         .bind(new_id.to_string())
         .bind(source.project_id.to_string())
         .bind(new_creator_id.to_string())
+        .bind(&source.title)
         .bind(&now)
         .bind(&now)
         .execute(&mut *tx)
@@ -277,15 +304,23 @@ impl SqliteRepository {
         .execute(&mut *tx)
         .await?;
 
+        // Set last_message_at from the copied messages
+        sqlx::query(
+            "UPDATE sessions SET last_message_at = \
+             (SELECT MAX(created_at) FROM session_messages WHERE session_id = ?) \
+             WHERE id = ?",
+        )
+        .bind(new_id.to_string())
+        .bind(new_id.to_string())
+        .execute(&mut *tx)
+        .await?;
+
         tx.commit().await?;
 
-        Ok(DbSession {
-            id: new_id,
-            project_id: source.project_id,
-            creator_id: new_creator_id,
-            share_mode: ShareMode::Private,
-            created_at: Self::parse_timestamp(now.clone(), "sessions.created_at")?,
-            updated_at: Self::parse_timestamp(now, "sessions.updated_at")?,
+        self.get_session(new_id).await?.ok_or_else(|| {
+            crate::repository::RepositoryError::InvalidData(
+                "forked session disappeared after creation".into(),
+            )
         })
     }
 
@@ -322,20 +357,64 @@ impl SqliteRepository {
             .await?;
         }
 
-        sqlx::query("UPDATE sessions SET updated_at = ? WHERE id = ?;")
-            .bind(&now)
-            .bind(&sid)
-            .execute(&self.pool)
-            .await?;
+        // Extract text snippet from the last message for session card previews.
+        let snippet = messages
+            .iter()
+            .rev()
+            .find_map(|msg| {
+                let text: String = msg
+                    .contents
+                    .iter()
+                    .filter_map(|p| p.as_text())
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                if text.is_empty() { None } else { Some(text) }
+            })
+            .map(|t| t.chars().take(200).collect::<String>());
+
+        // Use MAX(created_at) from messages so this path is consistent with fork_session,
+        // which derives last_message_at from message timestamps rather than server clock.
+        sqlx::query(
+            "UPDATE sessions \
+             SET updated_at = ?, \
+                 last_message_at = (SELECT MAX(created_at) FROM session_messages WHERE session_id = ?), \
+                 last_message_snippet = ? \
+             WHERE id = ?;",
+        )
+        .bind(&now)
+        .bind(&sid)
+        .bind(snippet.as_deref())
+        .bind(&sid)
+        .execute(&self.pool)
+        .await?;
 
         Ok(())
     }
 
     pub async fn clear_messages(&self, session_id: Uuid) -> RepositoryResult<()> {
+        let sid = session_id.to_string();
+        let now = Self::now_string();
+        let mut tx = self.pool.begin().await?;
+
         sqlx::query("DELETE FROM session_messages WHERE session_id = ?;")
-            .bind(session_id.to_string())
-            .execute(&self.pool)
+            .bind(&sid)
+            .execute(&mut *tx)
             .await?;
+
+        sqlx::query(
+            "UPDATE sessions SET last_message_at = NULL, last_message_snippet = NULL, title = NULL, updated_at = ? WHERE id = ?;",
+        )
+        .bind(&now)
+        .bind(&sid)
+        .execute(&mut *tx)
+        .await?;
+
+        sqlx::query("DELETE FROM session_reads WHERE session_id = ?;")
+            .bind(&sid)
+            .execute(&mut *tx)
+            .await?;
+
+        tx.commit().await?;
         Ok(())
     }
 
@@ -355,5 +434,114 @@ impl SqliteRepository {
                     .map_err(crate::repository::RepositoryError::Serialization)
             })
             .collect()
+    }
+
+    // ── Session metadata ────────────────────────────────────────────────────────
+
+    /// Set title only if not already set (idempotent for concurrent title-gen spawns).
+    pub async fn set_session_title(&self, session_id: Uuid, title: &str) -> RepositoryResult<()> {
+        sqlx::query("UPDATE sessions SET title = ? WHERE id = ? AND title IS NULL")
+            .bind(title)
+            .bind(session_id.to_string())
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    /// Mark all current messages as read for a user. Uses upsert semantics.
+    pub async fn mark_session_read(&self, session_id: Uuid, user_id: Uuid) -> RepositoryResult<()> {
+        let now = Self::now_string();
+        sqlx::query(
+            "INSERT INTO session_reads (session_id, user_id, last_read_seq, updated_at)
+             VALUES (
+                 ?,
+                 ?,
+                 (SELECT COALESCE(MAX(seq), 0) FROM session_messages WHERE session_id = ?),
+                 ?
+             )
+             ON CONFLICT (session_id, user_id) DO UPDATE SET
+                 last_read_seq = (SELECT COALESCE(MAX(seq), 0)
+                                  FROM session_messages
+                                  WHERE session_id = excluded.session_id),
+                 updated_at = excluded.updated_at",
+        )
+        .bind(session_id.to_string())
+        .bind(user_id.to_string())
+        .bind(session_id.to_string())
+        .bind(&now)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    /// Returns unread counts for a batch of sessions for a given user (eliminates N+1 in list).
+    pub async fn count_unread_batch_for_user(
+        &self,
+        session_ids: &[Uuid],
+        user_id: Uuid,
+    ) -> RepositoryResult<std::collections::HashMap<Uuid, u64>> {
+        if session_ids.is_empty() {
+            return Ok(std::collections::HashMap::new());
+        }
+
+        let uid = user_id.to_string();
+        let placeholders = session_ids
+            .iter()
+            .map(|_| "?")
+            .collect::<Vec<_>>()
+            .join(", ");
+        let sql = format!(
+            "SELECT sm.session_id, COUNT(*) AS cnt
+             FROM session_messages sm
+             WHERE sm.session_id IN ({placeholders})
+               AND sm.seq > COALESCE(
+                   (SELECT sr.last_read_seq FROM session_reads sr
+                    WHERE sr.session_id = sm.session_id AND sr.user_id = ?),
+                   0
+               )
+             GROUP BY sm.session_id"
+        );
+
+        let mut q = sqlx::query(&sql);
+        for sid in session_ids {
+            q = q.bind(sid.to_string());
+        }
+        q = q.bind(&uid);
+
+        let rows = q.fetch_all(&self.pool).await?;
+
+        let mut map = std::collections::HashMap::new();
+        for row in rows {
+            let sid_str: String = row.get("session_id");
+            let count = row.get::<i64, _>("cnt") as u64;
+            if let Ok(sid) = Uuid::parse_str(&sid_str) {
+                map.insert(sid, count);
+            }
+        }
+        Ok(map)
+    }
+
+    /// Count messages the user has not yet read in a session.
+    pub async fn count_session_unread(
+        &self,
+        session_id: Uuid,
+        user_id: Uuid,
+    ) -> RepositoryResult<u64> {
+        let row = sqlx::query(
+            "SELECT COUNT(*) AS cnt FROM session_messages
+             WHERE session_id = ?
+               AND seq > COALESCE(
+                   (SELECT last_read_seq FROM session_reads
+                    WHERE session_id = ? AND user_id = ?),
+                   0
+               )",
+        )
+        .bind(session_id.to_string())
+        .bind(session_id.to_string())
+        .bind(user_id.to_string())
+        .fetch_one(&self.pool)
+        .await?;
+
+        Ok(row.get::<i64, _>("cnt") as u64)
     }
 }
