@@ -294,7 +294,7 @@ impl SqliteRepository {
     ) -> RepositoryResult<Vec<DbSession>> {
         let rows = sqlx::query(
             "SELECT id, project_id, creator_id, share_mode, title, last_message_at, \
-                    created_at, updated_at \
+                    last_message_snippet, created_at, updated_at \
              FROM sessions WHERE project_id = ? \
              ORDER BY created_at DESC",
         )
@@ -383,11 +383,10 @@ impl SqliteRepository {
         }
 
         let sid = session_id.to_string();
-        let mut last_created_at = Self::now_string();
+        let mut tx = self.pool.begin().await?;
 
         for msg in messages {
             let now = Self::now_string();
-            last_created_at = now.clone();
             let msg_json = serde_json::to_string(&msg.message)?;
             sqlx::query(
                 "INSERT INTO session_messages \
@@ -400,7 +399,7 @@ impl SqliteRepository {
             .bind(msg.sender_kind.as_str())
             .bind(&msg.sender_name)
             .bind(msg.sender_user_id.map(|u| u.to_string()))
-            .execute(&self.pool)
+            .execute(&mut *tx)
             .await?;
         }
 
@@ -420,7 +419,7 @@ impl SqliteRepository {
             })
             .map(|t| t.chars().take(200).collect::<String>());
 
-        let now = last_created_at;
+        let now = Self::now_string();
 
         // Use MAX(created_at) from messages so this path is consistent with fork_session,
         // which derives last_message_at from message timestamps rather than server clock.
@@ -435,9 +434,10 @@ impl SqliteRepository {
         .bind(&sid)
         .bind(snippet.as_deref())
         .bind(&sid)
-        .execute(&self.pool)
+        .execute(&mut *tx)
         .await?;
 
+        tx.commit().await?;
         Ok(())
     }
 
@@ -494,7 +494,14 @@ impl SqliteRepository {
                 let sender_user_id: Option<Uuid> = row
                     .try_get::<Option<String>, _>("sender_user_id")
                     .unwrap_or(None)
-                    .and_then(|s| Uuid::parse_str(&s).ok());
+                    .map(|s| {
+                        Uuid::parse_str(&s).map_err(|_| {
+                            crate::repository::RepositoryError::InvalidData(format!(
+                                "invalid sender_user_id uuid: {s}"
+                            ))
+                        })
+                    })
+                    .transpose()?;
                 let created_at =
                     Self::parse_timestamp(row.get("created_at"), "session_messages.created_at")?;
 
@@ -507,32 +514,6 @@ impl SqliteRepository {
                 })
             })
             .collect()
-    }
-
-    /// Returns the text content of the first user-role message in the session.
-    pub async fn get_first_user_message_text(
-        &self,
-        session_id: Uuid,
-    ) -> RepositoryResult<Option<String>> {
-        let row = sqlx::query(
-            "SELECT message_json FROM session_messages \
-             WHERE session_id = ? \
-               AND json_extract(message_json, '$.role') = 'user' \
-             ORDER BY seq ASC LIMIT 1",
-        )
-        .bind(session_id.to_string())
-        .fetch_optional(&self.pool)
-        .await?;
-
-        let Some(row) = row else { return Ok(None) };
-        let json: String = row.get("message_json");
-        let msg = serde_json::from_str::<Message>(&json)?;
-        let text = msg
-            .contents
-            .iter()
-            .find_map(|p| p.as_text())
-            .map(str::to_string);
-        Ok(text)
     }
 
     /// Mark all current messages as read for a user. Uses upsert semantics.

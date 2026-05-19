@@ -375,6 +375,86 @@ async fn can_append_messages_after_clear() {
     assert_eq!(text, "new");
 }
 
+/// GET /sessions/{id}/messages returns correct sender.kind, sender.user_id, and sender.name.
+#[tokio::test]
+async fn get_messages_response_includes_correct_sender_field() {
+    use agent_k_backend::repository::{DbSenderKind, NewSessionMessage};
+    use ailoy::message::{Message, Part, Role};
+
+    let store = common::make_test_store();
+    let repo = common::make_repo().await;
+    let data_root = std::env::temp_dir().join(format!("agent-k-sender-{}", Uuid::new_v4()));
+    let state = std::sync::Arc::new(agent_k_backend::state::AppState::new(
+        repo.clone(),
+        store,
+        common::test_jwt_config(),
+        data_root,
+    ));
+    let app = common::make_app_with_state(state.clone());
+
+    let username = format!("alice_sender_{}", Uuid::new_v4().simple());
+    let alice_info = common::signup(&app, &username, "Password123!").await;
+    let alice_token = common::login(&app, &username, "Password123!").await;
+    let alice_id = Uuid::parse_str(alice_info["id"].as_str().unwrap()).unwrap();
+    let project = common::get_personal_project(&app, &alice_token).await;
+    let project_id = Uuid::parse_str(project["id"].as_str().unwrap()).unwrap();
+
+    let session = state
+        .repository
+        .create_session(project_id, alice_id)
+        .await
+        .unwrap();
+    repo.append_messages(
+        session.id,
+        &[
+            NewSessionMessage {
+                message: Message::new(Role::User).with_contents([Part::text("hello")]),
+                sender_kind: DbSenderKind::User,
+                sender_name: None,
+                sender_user_id: Some(alice_id),
+            },
+            NewSessionMessage {
+                message: Message::new(Role::Assistant).with_contents([Part::text("hi there")]),
+                sender_kind: DbSenderKind::Agent,
+                sender_name: Some("agent-k".to_string()),
+                sender_user_id: None,
+            },
+        ],
+    )
+    .await
+    .unwrap();
+
+    let body = common::get_message_history(&app, session.id, &alice_token).await;
+    let items = body["items"].as_array().expect("items must be an array");
+    assert_eq!(items.len(), 2, "expected 2 messages");
+
+    let alice_id_str = alice_id.to_string();
+
+    let user_msg = &items[0];
+    assert_eq!(
+        user_msg["sender"]["kind"].as_str(),
+        Some("user"),
+        "first message sender.kind must be 'user': {user_msg}"
+    );
+    assert_eq!(
+        user_msg["sender"]["user_id"].as_str(),
+        Some(alice_id_str.as_str()),
+        "first message sender.user_id must be alice's id: {user_msg}"
+    );
+
+    let agent_msg = &items[1];
+    assert_eq!(
+        agent_msg["sender"]["kind"].as_str(),
+        Some("agent"),
+        "second message sender.kind must be 'agent': {agent_msg}"
+    );
+    assert_eq!(
+        agent_msg["sender"]["name"].as_str(),
+        Some("agent-k"),
+        "second message sender.name must be 'agent-k': {agent_msg}"
+    );
+}
+
 /// After clearing, the in-memory agent history is also wiped so the next turn
 /// starts fresh.
 #[tokio::test(flavor = "multi_thread")]

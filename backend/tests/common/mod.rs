@@ -411,7 +411,9 @@ pub fn parse_sse_events_by_type(body: &[u8], target_event: &str) -> Vec<String> 
 }
 
 /// Converts `&[Message]` to `Vec<NewSessionMessage>` for use in tests.
-/// Applies role-based sender attribution matching classify_senders in the handler.
+/// User messages get `sender_user_id: None`; the handler falls back to `session.creator_id`,
+/// which is correct for single-user tests. When a test needs to assert on `sender.user_id`
+/// directly, construct `NewSessionMessage` values explicitly instead.
 pub fn to_new_msgs(msgs: &[ailoy::message::Message]) -> Vec<NewSessionMessage> {
     msgs.iter()
         .map(|m| {
