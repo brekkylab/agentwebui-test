@@ -14,7 +14,7 @@ import { useToastStore } from '@/components/Toast';
 import { shareMeta } from '@/domain/metadata';
 import { MarkdownRenderer } from '@/components/chat/MarkdownRenderer';
 import { AI_USER } from '@/api/transformers';
-import { formatMessageTime } from '@/lib/formatMessageTime';
+import { formatMessageTime, formatMessageTimeFull } from '@/lib/formatMessageTime';
 import type { Message, ShareMode, User } from '@/domain/types';
 import { ApiError } from '@/api/client';
 import { SessionTitleText } from '@/components/SessionTitleText';
@@ -88,9 +88,13 @@ function SessionPage() {
     const ctrl = new AbortController();
     try {
       for await (const update of streamMessage(sessionId, text, ctrl.signal)) {
-        setLiveMessages((prev) => prev.map((m) => (
-          m.id === aiId ? { ...m, body: update.text, status: update.status === 'done' ? 'done' : 'streaming' } : m
-        )));
+        setLiveMessages((prev) => prev.map((m) => {
+          if (m.id !== aiId) return m;
+          const updatedToolCalls = update.toolCalls.length > 0
+            ? update.toolCalls.map((tc) => ({ ...tc }))
+            : m.toolCalls;
+          return { ...m, body: update.text, status: update.status === 'done' ? 'done' : 'streaming', toolCalls: updatedToolCalls };
+        }));
         if (update.status === 'error') {
           showToast(`스트리밍 실패: ${update.errorText ?? 'unknown'}`);
           break;
@@ -237,7 +241,7 @@ function MessageBubble({
         <div className="cw-message-meta">
           <b>{isSelf ? `${displayUser.name.split(' ')[0]} · 나` : isAi ? 'AI' : displayUser.name.split(' ')[0]}</b>
           {agentLabel && <span>{agentLabel}</span>}
-          <time dateTime={message.createdAt}>{timeLabel}</time>
+          <time dateTime={message.createdAt} data-tooltip={formatMessageTimeFull(message.createdAt)}>{timeLabel}</time>
         </div>
         <div className={isAi ? 'cw-ai-prose' : 'cw-message-bubble'}>
           {isAi

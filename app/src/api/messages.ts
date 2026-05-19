@@ -1,5 +1,5 @@
 import { request, streamSse } from './client';
-import type { AiloyMessage, AiloyPart, MessageOutput, SessionMessageList } from './backend-types';
+import type { AiloyMessage, AiloyPart, AiloyToolCall, MessageOutput, SessionMessageList } from './backend-types';
 import { aiMessageText, collapseToolMessages } from './transformers';
 import type { Message } from '@/domain/types';
 
@@ -15,9 +15,16 @@ export async function sendMessage(sessionId: string, content: string): Promise<M
   });
 }
 
+export interface StreamToolCall {
+  id: string;
+  name: string;
+  arguments?: unknown;
+  result?: string;
+}
+
 export interface StreamUpdate {
   text: string;
-  toolCalls: string[];
+  toolCalls: StreamToolCall[];
   status: 'streaming' | 'done' | 'error';
   errorText?: string;
 }
@@ -28,7 +35,7 @@ export async function* streamMessage(
   signal?: AbortSignal,
 ): AsyncGenerator<StreamUpdate, void, void> {
   let accumulated = '';
-  const toolCalls: string[] = [];
+  const toolCalls: StreamToolCall[] = [];
 
   for await (const evt of streamSse(`/sessions/${sessionId}/messages/stream`, { content }, signal)) {
     if (evt.event === 'error') {
@@ -45,14 +52,22 @@ export async function* streamMessage(
     try { output = JSON.parse(evt.data) as { message?: AiloyMessage }; } catch { continue; }
     if (!output?.message) continue;
 
-    if (output.message.role === 'assistant') {
-      accumulated = aiMessageText(output.message.contents as AiloyPart[] | undefined);
-      const calls = (output.message.tool_calls ?? []) as Array<{ function?: { name?: string } }>;
-      for (const call of calls) {
-        const name = call?.function?.name;
-        if (name && !toolCalls.includes(name)) toolCalls.push(name);
+    const msg = output.message;
+
+    if (msg.role === 'assistant') {
+      accumulated = aiMessageText(msg.contents as AiloyPart[] | undefined);
+      for (const call of (msg.tool_calls ?? []) as AiloyToolCall[]) {
+        if (call.id && call.function?.name && !toolCalls.find((tc) => tc.id === call.id)) {
+          toolCalls.push({ id: call.id, name: call.function.name, arguments: call.function.arguments });
+        }
       }
-      yield { text: accumulated, toolCalls, status: 'streaming' };
+      yield { text: accumulated, toolCalls: [...toolCalls], status: 'streaming' };
+    } else if (msg.role === 'tool' && msg.id) {
+      const tc = toolCalls.find((t) => t.id === msg.id);
+      if (tc) {
+        tc.result = aiMessageText(msg.contents as AiloyPart[] | undefined) || '[done]';
+        yield { text: accumulated, toolCalls: [...toolCalls], status: 'streaming' };
+      }
     }
   }
 }
