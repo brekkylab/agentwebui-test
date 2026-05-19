@@ -17,6 +17,7 @@ import { AI_USER } from '@/api/transformers';
 import { formatMessageTime } from '@/lib/formatMessageTime';
 import type { Message, ShareMode, User } from '@/domain/types';
 import { ApiError } from '@/api/client';
+import { SessionTitleText } from '@/components/SessionTitleText';
 
 export const Route = createFileRoute('/_app/projects/$projectId/sessions/$sessionId')({
   component: SessionPage,
@@ -130,7 +131,7 @@ function SessionPage() {
       <section className="cw-chat-surface">
         <div className="cw-chat-head">
           <div>
-            <h1>{sess?.title ?? '...'}</h1>
+            <h1><SessionTitleText title={sess?.title ?? '...'} /></h1>
             <p>
               {creator && <>Started by <Avatar user={creator} small /> {creator.name} · </>}
               {sess?.references.length ?? 0} files ·{' '}

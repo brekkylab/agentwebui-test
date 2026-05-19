@@ -567,12 +567,14 @@ pub async fn send_message(
     let to_persist: Vec<NewSessionMessage> = new_messages
         .into_iter()
         .zip(senders)
-        .map(|(message, (sender_kind, sender_name, sender_user_id))| NewSessionMessage {
-            message,
-            sender_kind,
-            sender_name,
-            sender_user_id,
-        })
+        .map(
+            |(message, (sender_kind, sender_name, sender_user_id))| NewSessionMessage {
+                message,
+                sender_kind,
+                sender_name,
+                sender_user_id,
+            },
+        )
         .collect();
 
     state

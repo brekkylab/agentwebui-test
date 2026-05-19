@@ -419,7 +419,12 @@ pub fn to_new_msgs(msgs: &[ailoy::message::Message]) -> Vec<NewSessionMessage> {
                 ailoy::message::Role::User => (DbSenderKind::User, None, None),
                 _ => (DbSenderKind::Agent, Some("agent-k".to_string()), None),
             };
-            NewSessionMessage { message: m.clone(), sender_kind, sender_name, sender_user_id }
+            NewSessionMessage {
+                message: m.clone(),
+                sender_kind,
+                sender_name,
+                sender_user_id,
+            }
         })
         .collect()
 }

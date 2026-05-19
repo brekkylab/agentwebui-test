@@ -498,21 +498,15 @@ impl SqliteRepository {
                 let created_at =
                     Self::parse_timestamp(row.get("created_at"), "session_messages.created_at")?;
 
-                Ok(DbSessionMessage { message, sender_kind, sender_name, sender_user_id, created_at })
+                Ok(DbSessionMessage {
+                    message,
+                    sender_kind,
+                    sender_name,
+                    sender_user_id,
+                    created_at,
+                })
             })
             .collect()
-    }
-
-    // ── Session metadata ────────────────────────────────────────────────────────
-
-    /// Set title only if not already set (idempotent for concurrent title-gen spawns).
-    pub async fn set_session_title(&self, session_id: Uuid, title: &str) -> RepositoryResult<()> {
-        sqlx::query("UPDATE sessions SET title = ? WHERE id = ? AND title IS NULL")
-            .bind(title)
-            .bind(session_id.to_string())
-            .execute(&self.pool)
-            .await?;
-        Ok(())
     }
 
     /// Returns the text content of the first user-role message in the session.
@@ -636,5 +630,17 @@ impl SqliteRepository {
         .await?;
 
         Ok(row.get::<i64, _>("cnt") as u64)
+    }
+
+    // ── Session metadata ────────────────────────────────────────────────────────
+
+    /// Set title only if not already set (idempotent for concurrent title-gen spawns).
+    pub async fn set_session_title(&self, session_id: Uuid, title: &str) -> RepositoryResult<()> {
+        sqlx::query("UPDATE sessions SET title = ? WHERE id = ? AND title IS NULL")
+            .bind(title)
+            .bind(session_id.to_string())
+            .execute(&self.pool)
+            .await?;
+        Ok(())
     }
 }

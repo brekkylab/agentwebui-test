@@ -540,7 +540,9 @@ async fn get_first_user_message_skips_non_user_messages() {
         .collect();
     messages.push(Message::new(Role::User).with_contents([Part::text("actual user message")]));
 
-    repo.append_messages(session.id, &common::to_new_msgs(&messages)).await.unwrap();
+    repo.append_messages(session.id, &common::to_new_msgs(&messages))
+        .await
+        .unwrap();
 
     let text = repo.get_first_user_message_text(session.id).await.unwrap();
     assert_eq!(

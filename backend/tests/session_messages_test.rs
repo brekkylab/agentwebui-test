@@ -61,7 +61,9 @@ async fn session_persists_and_restores_history_across_restart() {
 
     // History must be restored from DB after restart.
     let messages = get_message_history(&app, session_id, &token).await;
-    let arr = messages["items"].as_array().expect("items must be a JSON array");
+    let arr = messages["items"]
+        .as_array()
+        .expect("items must be a JSON array");
     assert_eq!(arr.len(), 2, "both seeded messages must survive restart");
     assert_eq!(arr[0]["message"]["role"].as_str().unwrap(), "user");
     assert_eq!(arr[1]["message"]["role"].as_str().unwrap(), "assistant");
@@ -190,7 +192,9 @@ async fn get_messages_returns_persisted_messages_in_order() {
     }
 
     let body = get_message_history(&app, session.id, &token).await;
-    let arr = body["items"].as_array().expect("items must be a JSON array");
+    let arr = body["items"]
+        .as_array()
+        .expect("items must be a JSON array");
     assert_eq!(arr.len(), 2, "must return exactly two messages");
 
     let role0 = arr[0]["message"]["role"].as_str().unwrap_or("");
@@ -365,7 +369,9 @@ async fn can_append_messages_after_clear() {
     let arr = body["items"].as_array().unwrap();
     assert_eq!(arr.len(), 1, "only the new message must remain");
 
-    let text = arr[0]["message"]["contents"][0]["text"].as_str().unwrap_or("");
+    let text = arr[0]["message"]["contents"][0]["text"]
+        .as_str()
+        .unwrap_or("");
     assert_eq!(text, "new");
 }
 
@@ -399,7 +405,7 @@ async fn clear_messages_also_clears_in_memory_agent_history() {
         repo.append_messages(
             id,
             &common::to_new_msgs(&[
-                Message::new(Role::User).with_contents([Part::text("should be cleared")]),
+                Message::new(Role::User).with_contents([Part::text("should be cleared")])
             ]),
         )
         .await
