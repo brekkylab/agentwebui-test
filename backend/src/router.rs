@@ -66,9 +66,10 @@ pub fn get_router(state: Arc<AppState>) -> ApiRouter {
         )
         .api_route(
             "/projects/{project_id}/dirents",
-            // Body limit disabled only for upload; GET list has no body.
+            // Body limit disabled only for upload; PATCH batch_op carries a small JSON body.
             post(handlers::upload.layer(axum::extract::DefaultBodyLimit::disable()))
-                .get(handlers::list),
+                .get(handlers::list)
+                .patch(handlers::batch_op),
         )
         .api_route(
             "/projects/{project_id}/dirents/{*path}",

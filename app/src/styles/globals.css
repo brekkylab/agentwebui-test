@@ -169,6 +169,42 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
 .cw-sidebar-tree .cw-tree-root { padding: 6px 8px; font-size: 12px; font-weight: 600; color: var(--cw-ink-3); border: 0; background: transparent; width: 100%; cursor: pointer; display: inline-flex; align-items: center; gap: 6px; min-height: 30px; border-radius: var(--cw-radius-sm); margin-bottom: 4px; }
 .cw-sidebar-tree .cw-tree-root:hover { background: var(--cw-paper-3); color: var(--cw-ink); }
 .cw-sidebar-tree .cw-tree-root.is-active { background: var(--cw-paper-3); color: var(--cw-ink); }
+/* Drop target highlight when dragging dirents onto a folder. Scoped to
+   .cw-sidebar-tree so it (a) doesn't bleed into the FolderPickerDialog tree
+   and (b) wins over .cw-sidebar-tree .cw-tree-row.is-active specificity. */
+.cw-sidebar-tree .cw-tree-row.is-drop-target,
+.cw-sidebar-tree .cw-tree-root.is-drop-target {
+  background: var(--cw-accent-soft);
+  outline: 2px solid var(--cw-accent);
+  outline-offset: -2px;
+  color: var(--cw-ink);
+}
+/* Compact pill rendered as the HTML5 drag image — replaces the default,
+   which renders the whole row/card and obscures the drop area. */
+.cw-drag-ghost {
+  position: absolute;
+  top: -1000px;
+  left: -1000px;
+  padding: 6px 12px;
+  background: var(--cw-paper);
+  border: 1px solid var(--cw-accent, var(--cw-paper-4));
+  border-radius: 8px;
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--cw-ink);
+  box-shadow: 0 4px 12px color-mix(in oklch, var(--cw-ink) 18%, transparent);
+  white-space: nowrap;
+  pointer-events: none;
+}
+/* FolderPickerDialog: reuses .cw-dialog backdrop; only the tree area is custom. */
+.cw-folder-picker-tree { max-height: 280px; overflow: auto; border: 1px solid var(--cw-line); border-radius: 8px; padding: 6px; margin-top: 8px; background: var(--cw-paper-2); }
+.cw-folder-picker-tree .cw-tree-row { display: flex; align-items: center; gap: 4px; min-height: 28px; padding: 0 6px 0 8px; border-radius: var(--cw-radius-sm); color: var(--cw-ink-2); }
+.cw-folder-picker-tree .cw-tree-row.is-selected { background: var(--cw-selected-bg); color: var(--cw-ink); font-weight: 500; }
+.cw-folder-picker-tree .cw-tree-row.is-disabled { opacity: 0.4; }
+.cw-folder-picker-tree .cw-tree-row.is-disabled .cw-tree-label { cursor: not-allowed; }
+.cw-folder-picker-tree .cw-tree-chevron { background: transparent; border: 0; padding: 2px; cursor: pointer; color: var(--cw-ink-3); display: inline-flex; align-items: center; }
+.cw-folder-picker-tree .cw-tree-label { background: transparent; border: 0; padding: 4px 6px; cursor: pointer; flex: 1; text-align: left; display: inline-flex; align-items: center; gap: 6px; color: inherit; font: inherit; }
+.cw-folder-picker-tree .cw-tree-label:hover { color: var(--cw-ink); }
 .cw-sidebar-tree .cw-tree-chevron { width: 18px; height: 22px; display: inline-flex; align-items: center; justify-content: center; border: 0; background: transparent; color: var(--cw-ink-4); cursor: pointer; padding: 0; border-radius: var(--cw-radius-sm); flex: 0 0 auto; }
 .cw-sidebar-tree .cw-tree-chevron:hover { color: var(--cw-ink-2); background: var(--cw-paper-3); }
 .cw-sidebar-tree .cw-tree-label { flex: 1 1 auto; min-width: 0; display: inline-flex; align-items: center; gap: 6px; border: 0; background: transparent; padding: 4px 6px; text-align: left; font-size: 12.5px; color: inherit; cursor: pointer; border-radius: var(--cw-radius-sm); }
@@ -533,8 +569,22 @@ button:disabled { cursor: not-allowed; opacity: .48; transform: none !important;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.cw-file-more { width: 24px; height: 24px; border-radius: 5px; display: inline-flex; align-items: center; justify-content: center; color: var(--cw-ink-4); }
+.cw-file-menu-wrap { position: relative; flex-shrink: 0; }
+.cw-file-more { width: 24px; height: 24px; border-radius: 5px; display: inline-flex; align-items: center; justify-content: center; border: 0; background: transparent; color: var(--cw-ink-4); cursor: pointer; transition: background 120ms, color 120ms; }
 .cw-file-row:hover .cw-file-more { color: var(--cw-ink); }
+.cw-file-more:hover, .cw-file-more[aria-expanded="true"] { background: var(--cw-paper-3); color: var(--cw-ink); }
+.cw-file-dropdown { position: absolute; top: calc(100% + 4px); right: 0; z-index: 120; min-width: 148px; padding: 4px; list-style: none; margin: 0; background: var(--cw-paper); border: 1px solid var(--cw-line); border-radius: 10px; box-shadow: 0 4px 16px color-mix(in oklch, var(--cw-ink) 10%, transparent); }
+.cw-file-dropdown li button { display: flex; align-items: center; gap: 8px; width: 100%; padding: 6px 9px; border: 0; border-radius: 6px; background: transparent; color: var(--cw-ink-2); font-size: 12.5px; cursor: pointer; text-align: left; white-space: nowrap; }
+.cw-file-dropdown li button:hover { background: var(--cw-paper-3); color: var(--cw-ink); }
+.cw-file-dropdown-sep { height: 1px; background: var(--cw-line); margin: 3px 4px; }
+.cw-file-dropdown-destructive { color: var(--cw-cozy-rose) !important; }
+.cw-file-dropdown-destructive:hover { background: color-mix(in oklch, var(--cw-cozy-rose) 10%, var(--cw-paper)) !important; }
+.cw-grid-card .cw-file-menu-wrap { position: absolute; top: 4px; right: 4px; }
+.cw-grid-card .cw-file-more { opacity: 0; transition: opacity 120ms, background 120ms, color 120ms; }
+.cw-grid-card:hover .cw-file-more,
+.cw-grid-card.is-selected .cw-file-more,
+.cw-grid-card:focus-within .cw-file-more,
+.cw-grid-card .cw-file-more[aria-expanded="true"] { opacity: 1; }
 .cw-file-row .cw-pocket { width: 30px; height: 30px; border-radius: 7px; flex: 0 0 auto; }
 .cw-pocket.is-compact { width: 22px; height: 22px; border-radius: 7px; }
 .cw-file-pdf { background: color-mix(in oklch, var(--cw-cozy-rose) 14%, var(--cw-paper)); color: var(--cw-cozy-rose); }
