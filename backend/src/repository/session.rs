@@ -448,32 +448,6 @@ impl SqliteRepository {
         Ok(())
     }
 
-    /// Returns the text content of the first user-role message in the session.
-    pub async fn get_first_user_message_text(
-        &self,
-        session_id: Uuid,
-    ) -> RepositoryResult<Option<String>> {
-        let row = sqlx::query(
-            "SELECT message_json FROM session_messages \
-             WHERE session_id = ? \
-               AND json_extract(message_json, '$.role') = 'user' \
-             ORDER BY seq ASC LIMIT 1",
-        )
-        .bind(session_id.to_string())
-        .fetch_optional(&self.pool)
-        .await?;
-
-        let Some(row) = row else { return Ok(None) };
-        let json: String = row.get("message_json");
-        let msg = serde_json::from_str::<Message>(&json)?;
-        let text = msg
-            .contents
-            .iter()
-            .find_map(|p| p.as_text())
-            .map(str::to_string);
-        Ok(text)
-    }
-
     /// Mark all current messages as read for a user. Uses upsert semantics.
     pub async fn mark_session_read(&self, session_id: Uuid, user_id: Uuid) -> RepositoryResult<()> {
         let now = Self::now_string();
