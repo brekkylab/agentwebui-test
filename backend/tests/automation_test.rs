@@ -172,7 +172,7 @@ async fn webhook_trigger_returns_plaintext_token_once() {
         "POST",
         &format!("/automations/{auto_id}/triggers"),
         &token,
-        Some(json!({ "kind": "webhook", "dedupe": "payload_hash" })),
+        Some(json!({ "kind": "webhook" })),
     )
     .await;
     assert_eq!(status, StatusCode::CREATED, "create trigger: {body}");
@@ -242,7 +242,7 @@ async fn trigger_kind_is_immutable() {
         &format!("/automations/{auto_id}/triggers/{tid}"),
         &token,
         Some(json!({
-            "spec": { "kind": "webhook", "dedupe": null }
+            "spec": { "kind": "webhook" }
         })),
     )
     .await;
@@ -438,4 +438,173 @@ async fn missing_resources_return_404() {
         let (status, _) = common::authed(&app, "GET", &path, &token, None).await;
         assert_eq!(status, StatusCode::NOT_FOUND, "expected 404 for {path}");
     }
+}
+
+// ─── webhook firing (auth-exempt route) ──────────────────────────────────────
+
+async fn fire_webhook(
+    app: &axum::Router,
+    bearer: Option<&str>,
+    idempotency_key: Option<&str>,
+    body: &str,
+) -> (StatusCode, serde_json::Value) {
+    use axum::{body::Body, http::Request};
+    use http_body_util::BodyExt;
+    use tower::ServiceExt;
+
+    let mut builder = Request::builder()
+        .method("POST")
+        .uri("/webhooks/automations")
+        .header("content-type", "application/json");
+    if let Some(t) = bearer {
+        builder = builder.header("authorization", format!("Bearer {t}"));
+    }
+    if let Some(k) = idempotency_key {
+        builder = builder.header("idempotency-key", k);
+    }
+    let resp = app
+        .clone()
+        .oneshot(builder.body(Body::from(body.to_string())).unwrap())
+        .await
+        .unwrap();
+    let status = resp.status();
+    let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+    let value = serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null);
+    (status, value)
+}
+
+async fn make_webhook_trigger(
+    app: &axum::Router,
+    token: &str,
+    auto_id: &str,
+) -> (String, String) {
+    let (status, body) = common::authed(
+        app,
+        "POST",
+        &format!("/automations/{auto_id}/triggers"),
+        token,
+        Some(json!({ "kind": "webhook" })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "create webhook trigger: {body}");
+    let tid = body["trigger"]["id"].as_str().unwrap().to_string();
+    let plaintext = body["webhook_token"].as_str().unwrap().to_string();
+    (tid, plaintext)
+}
+
+#[tokio::test]
+async fn webhook_fire_with_valid_token_queues_run() {
+    let repo = common::make_repo().await;
+    let app = common::make_app_with_repo(repo);
+    let (token, pid) = signup_and_personal_project(&app, "alice").await;
+    let auto = create_automation(&app, &token, &pid, "auto", vec!["hello"]).await;
+    let aid = auto["id"].as_str().unwrap().to_string();
+    let (_tid, plaintext) = make_webhook_trigger(&app, &token, &aid).await;
+
+    let (status, body) =
+        fire_webhook(&app, Some(&plaintext), None, r#"{"event":"ping"}"#).await;
+    assert_eq!(status, StatusCode::ACCEPTED, "fire webhook: {body}");
+    assert_eq!(body["status"], "queued");
+    assert!(body["run_id"].is_string());
+    assert!(body["session_id"].is_string());
+
+    // Triggered event payload should encode the webhook source.
+    let run_id = body["run_id"].as_str().unwrap();
+    let (_, events) = common::authed(
+        &app,
+        "GET",
+        &format!("/automations/{aid}/runs/{run_id}/events"),
+        &token,
+        None,
+    )
+    .await;
+    let triggered = events["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|e| e["kind"] == "triggered")
+        .expect("triggered event present");
+    assert_eq!(triggered["payload"]["source"], "webhook");
+}
+
+#[tokio::test]
+async fn webhook_fire_missing_bearer_returns_401() {
+    let repo = common::make_repo().await;
+    let app = common::make_app_with_repo(repo);
+    let (token, pid) = signup_and_personal_project(&app, "alice").await;
+    let auto = create_automation(&app, &token, &pid, "auto", vec!["x"]).await;
+    let aid = auto["id"].as_str().unwrap().to_string();
+    let (_tid, _plaintext) = make_webhook_trigger(&app, &token, &aid).await;
+
+    let (status, _) = fire_webhook(&app, None, None, r#"{}"#).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn webhook_fire_wrong_token_returns_401() {
+    let repo = common::make_repo().await;
+    let app = common::make_app_with_repo(repo);
+    let (token, pid) = signup_and_personal_project(&app, "alice").await;
+    let auto = create_automation(&app, &token, &pid, "auto", vec!["x"]).await;
+    let aid = auto["id"].as_str().unwrap().to_string();
+    let (_tid, _plaintext) = make_webhook_trigger(&app, &token, &aid).await;
+
+    let (status, _) = fire_webhook(&app, Some("wrong-token-value"), None, r#"{}"#).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn webhook_fire_disabled_trigger_returns_409() {
+    let repo = common::make_repo().await;
+    let app = common::make_app_with_repo(repo);
+    let (token, pid) = signup_and_personal_project(&app, "alice").await;
+    let auto = create_automation(&app, &token, &pid, "auto", vec!["x"]).await;
+    let aid = auto["id"].as_str().unwrap().to_string();
+    let (tid, plaintext) = make_webhook_trigger(&app, &token, &aid).await;
+
+    // Disable the trigger.
+    let (status, _) = common::authed(
+        &app,
+        "PATCH",
+        &format!("/automations/{aid}/triggers/{tid}"),
+        &token,
+        Some(json!({ "enabled": false })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    let (status, _) = fire_webhook(&app, Some(&plaintext), None, r#"{}"#).await;
+    assert_eq!(status, StatusCode::CONFLICT);
+}
+
+#[tokio::test]
+async fn webhook_idempotency_key_returns_same_run_on_repeat() {
+    let repo = common::make_repo().await;
+    let app = common::make_app_with_repo(repo);
+    let (token, pid) = signup_and_personal_project(&app, "alice").await;
+    let auto = create_automation(&app, &token, &pid, "auto", vec!["x"]).await;
+    let aid = auto["id"].as_str().unwrap().to_string();
+    let (_tid, plaintext) = make_webhook_trigger(&app, &token, &aid).await;
+
+    let key = "deploy-2026-05-19-abc";
+
+    let (s1, b1) = fire_webhook(&app, Some(&plaintext), Some(key), r#"{}"#).await;
+    assert_eq!(s1, StatusCode::ACCEPTED);
+    let run1_id = b1["run_id"].as_str().unwrap().to_string();
+
+    // Same key → same response (replay), still 202 Accepted with the
+    // original run's identifiers.
+    let (s2, b2) = fire_webhook(&app, Some(&plaintext), Some(key), r#"{}"#).await;
+    assert_eq!(s2, StatusCode::ACCEPTED, "replay should reuse run: {b2}");
+    assert_eq!(b2["run_id"].as_str().unwrap(), run1_id);
+
+    // A different idempotency key → fresh run.
+    let (s3, b3) = fire_webhook(&app, Some(&plaintext), Some("other-key"), r#"{}"#).await;
+    assert_eq!(s3, StatusCode::ACCEPTED);
+    assert_ne!(b3["run_id"].as_str().unwrap(), run1_id);
+
+    // No header → always fires fresh (caller opted out of idempotency).
+    let (s4, b4) = fire_webhook(&app, Some(&plaintext), None, r#"{}"#).await;
+    assert_eq!(s4, StatusCode::ACCEPTED);
+    assert_ne!(b4["run_id"].as_str().unwrap(), run1_id);
 }

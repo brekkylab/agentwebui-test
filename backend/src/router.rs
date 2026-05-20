@@ -152,6 +152,14 @@ pub fn get_router(state: Arc<AppState>) -> ApiRouter {
             get(handlers::get_document).delete(handlers::purge_document),
         );
 
+    // Auth-exempt route: webhook firing is gated only on the bearer token.
+    // The token IS the identifier — trigger is resolved by its stored hash,
+    // so no path parameter is needed.
+    let webhook_routes = ApiRouter::new().api_route(
+        "/webhooks/automations",
+        post(handlers::fire_webhook_trigger),
+    );
+
     ApiRouter::new()
         .merge(auth_routes)
         .merge(me_routes)
@@ -160,5 +168,6 @@ pub fn get_router(state: Arc<AppState>) -> ApiRouter {
         .merge(session_routes)
         .merge(automation_routes)
         .merge(document_routes)
+        .merge(webhook_routes)
         .with_state(state)
 }

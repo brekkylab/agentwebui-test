@@ -45,6 +45,7 @@ pub struct DbAutomationRun {
     pub scheduled_for: DateTime<Utc>,
     pub lease_until: Option<DateTime<Utc>>,
     pub previous_run_id: Option<Uuid>,
+    pub idempotency_key: Option<String>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -155,6 +156,7 @@ impl SqliteRepository {
             )?,
             lease_until,
             previous_run_id,
+            idempotency_key: row.get("idempotency_key"),
             created_at: Self::parse_timestamp(
                 row.get::<String, _>("created_at"),
                 "automation_runs.created_at",
@@ -440,6 +442,51 @@ impl SqliteRepository {
         Ok(result.rows_affected() > 0)
     }
 
+    /// Returns the most recent run for `trigger_id` whose `idempotency_key`
+    /// matches. Rows whose key has been NULL'd by the housekeeper cleanup are
+    /// implicitly excluded by the `=` filter. Used by the webhook handler to
+    /// replay a cached response when the caller resends the same
+    /// `Idempotency-Key`.
+    pub async fn find_webhook_run_by_idempotency_key(
+        &self,
+        trigger_id: Uuid,
+        idempotency_key: &str,
+    ) -> RepositoryResult<Option<DbAutomationRun>> {
+        let row = sqlx::query(
+            "SELECT id, automation_id, trigger_id, session_id, status, scheduled_for, lease_until, previous_run_id, idempotency_key, created_at, updated_at \
+             FROM automation_runs \
+             WHERE trigger_id = ? \
+               AND idempotency_key = ? \
+             ORDER BY created_at DESC LIMIT 1",
+        )
+        .bind(trigger_id.to_string())
+        .bind(idempotency_key)
+        .fetch_optional(&self.pool)
+        .await?;
+        row.as_ref().map(Self::row_to_db_run).transpose()
+    }
+
+    /// NULLs `idempotency_key` for runs created before `cutoff`. This releases
+    /// the UNIQUE partial index slot so the caller may safely reuse the same
+    /// `Idempotency-Key` after the retention window expires. Returns the
+    /// number of rows affected.
+    pub async fn clear_expired_idempotency_keys(
+        &self,
+        cutoff: DateTime<Utc>,
+    ) -> RepositoryResult<u64> {
+        let cutoff_s = Self::ts_string(cutoff);
+        let now = Self::now_string();
+        let result = sqlx::query(
+            "UPDATE automation_runs SET idempotency_key = NULL, updated_at = ? \
+             WHERE idempotency_key IS NOT NULL AND created_at < ?",
+        )
+        .bind(&now)
+        .bind(&cutoff_s)
+        .execute(&self.pool)
+        .await?;
+        Ok(result.rows_affected())
+    }
+
     pub async fn find_trigger_by_webhook_token_hash(
         &self,
         token_hash: &str,
@@ -503,8 +550,8 @@ impl SqliteRepository {
 
         sqlx::query(
             "INSERT INTO automation_runs \
-               (id, automation_id, trigger_id, session_id, status, scheduled_for, lease_until, previous_run_id, created_at, updated_at) \
-             VALUES (?, ?, ?, ?, 'queued', ?, NULL, ?, ?, ?)",
+               (id, automation_id, trigger_id, session_id, status, scheduled_for, lease_until, previous_run_id, idempotency_key, created_at, updated_at) \
+             VALUES (?, ?, ?, ?, 'queued', ?, NULL, ?, NULL, ?, ?)",
         )
         .bind(id.to_string())
         .bind(automation_id.to_string())
@@ -527,6 +574,7 @@ impl SqliteRepository {
             scheduled_for,
             lease_until: None,
             previous_run_id,
+            idempotency_key: None,
             created_at: Self::parse_timestamp(now.clone(), "automation_runs.created_at")?,
             updated_at: Self::parse_timestamp(now, "automation_runs.updated_at")?,
         })
@@ -545,6 +593,7 @@ impl SqliteRepository {
         scheduled_for: DateTime<Utc>,
         previous_run_id: Option<Uuid>,
         triggered_payload: Option<&serde_json::Value>,
+        idempotency_key: Option<&str>,
     ) -> RepositoryResult<DbAutomationRun> {
         let mut tx = self.pool.begin().await?;
         let now = Self::now_string();
@@ -566,8 +615,8 @@ impl SqliteRepository {
         let run_id = Uuid::new_v4();
         sqlx::query(
             "INSERT INTO automation_runs \
-               (id, automation_id, trigger_id, session_id, status, scheduled_for, lease_until, previous_run_id, created_at, updated_at) \
-             VALUES (?, ?, ?, ?, 'queued', ?, NULL, ?, ?, ?)",
+               (id, automation_id, trigger_id, session_id, status, scheduled_for, lease_until, previous_run_id, idempotency_key, created_at, updated_at) \
+             VALUES (?, ?, ?, ?, 'queued', ?, NULL, ?, ?, ?, ?)",
         )
         .bind(run_id.to_string())
         .bind(automation_id.to_string())
@@ -575,11 +624,12 @@ impl SqliteRepository {
         .bind(session_id.to_string())
         .bind(&scheduled_s)
         .bind(previous_run_id.map(|u| u.to_string()))
+        .bind(idempotency_key)
         .bind(&now)
         .bind(&now)
         .execute(&mut *tx)
         .await
-        .map_err(|e| Self::map_db_error(e, "automation_runs.session_id"))?;
+        .map_err(|e| Self::map_db_error(e, "automation_runs.idempotency_key"))?;
 
         let triggered_str = triggered_payload.map(serde_json::to_string).transpose()?;
         sqlx::query(
@@ -612,6 +662,7 @@ impl SqliteRepository {
             scheduled_for,
             lease_until: None,
             previous_run_id,
+            idempotency_key: idempotency_key.map(|s| s.to_string()),
             created_at: Self::parse_timestamp(now.clone(), "automation_runs.created_at")?,
             updated_at: Self::parse_timestamp(now, "automation_runs.updated_at")?,
         })
@@ -652,8 +703,8 @@ impl SqliteRepository {
         let run_id = Uuid::new_v4();
         sqlx::query(
             "INSERT INTO automation_runs \
-               (id, automation_id, trigger_id, session_id, status, scheduled_for, lease_until, previous_run_id, created_at, updated_at) \
-             VALUES (?, ?, ?, ?, 'queued', ?, NULL, NULL, ?, ?)",
+               (id, automation_id, trigger_id, session_id, status, scheduled_for, lease_until, previous_run_id, idempotency_key, created_at, updated_at) \
+             VALUES (?, ?, ?, ?, 'queued', ?, NULL, NULL, NULL, ?, ?)",
         )
         .bind(run_id.to_string())
         .bind(automation_id.to_string())
@@ -706,6 +757,7 @@ impl SqliteRepository {
             scheduled_for,
             lease_until: None,
             previous_run_id: None,
+            idempotency_key: None,
             created_at: Self::parse_timestamp(now.clone(), "automation_runs.created_at")?,
             updated_at: Self::parse_timestamp(now, "automation_runs.updated_at")?,
         })
@@ -713,7 +765,7 @@ impl SqliteRepository {
 
     pub async fn get_run(&self, id: Uuid) -> RepositoryResult<Option<DbAutomationRun>> {
         let row = sqlx::query(
-            "SELECT id, automation_id, trigger_id, session_id, status, scheduled_for, lease_until, previous_run_id, created_at, updated_at \
+            "SELECT id, automation_id, trigger_id, session_id, status, scheduled_for, lease_until, previous_run_id, idempotency_key, created_at, updated_at \
              FROM automation_runs WHERE id = ?",
         )
         .bind(id.to_string())
@@ -729,7 +781,7 @@ impl SqliteRepository {
         offset: i64,
     ) -> RepositoryResult<Vec<DbAutomationRun>> {
         let rows = sqlx::query(
-            "SELECT id, automation_id, trigger_id, session_id, status, scheduled_for, lease_until, previous_run_id, created_at, updated_at \
+            "SELECT id, automation_id, trigger_id, session_id, status, scheduled_for, lease_until, previous_run_id, idempotency_key, created_at, updated_at \
              FROM automation_runs WHERE automation_id = ? \
              ORDER BY created_at DESC LIMIT ? OFFSET ?",
         )
@@ -760,7 +812,7 @@ impl SqliteRepository {
                  WHERE status = 'queued' AND scheduled_for <= ?3 \
                  ORDER BY scheduled_for ASC LIMIT 1 \
               ) \
-             RETURNING id, automation_id, trigger_id, session_id, status, scheduled_for, lease_until, previous_run_id, created_at, updated_at",
+             RETURNING id, automation_id, trigger_id, session_id, status, scheduled_for, lease_until, previous_run_id, idempotency_key, created_at, updated_at",
         )
         .bind(&lease_s)
         .bind(&updated_at)

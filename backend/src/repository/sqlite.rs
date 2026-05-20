@@ -401,9 +401,7 @@ mod tests {
                 .await
                 .unwrap();
 
-            let spec = TriggerSpec::Webhook {
-                dedupe: Some("payload_hash".into()),
-            };
+            let spec = TriggerSpec::Webhook {};
             let token_hash = "abcd1234".repeat(8); // 64 chars, plausible sha256 hex
             let trigger = repo
                 .create_trigger(auto.id, &spec, Some(token_hash.clone()), None)
@@ -470,7 +468,7 @@ mod tests {
             // Webhook trigger should be excluded
             repo.create_trigger(
                 auto.id,
-                &TriggerSpec::Webhook { dedupe: None },
+                &TriggerSpec::Webhook {},
                 Some("hash_aaa".repeat(8)),
                 None,
             )
@@ -656,6 +654,97 @@ mod tests {
 
             // Second call is a no-op.
             assert!(repo.reap_all_running().await.unwrap().is_empty());
+        }
+
+        #[tokio::test]
+        async fn clear_expired_idempotency_keys_nulls_only_old_rows() {
+            let repo = make_repo("sqlite::memory:").await;
+            let (project_id, user_id) = fixtures(&repo).await;
+            let auto = repo
+                .create_automation(project_id, "a".into(), None, vec!["p".into()], user_id)
+                .await
+                .unwrap();
+            let spec = TriggerSpec::Webhook {};
+            let trigger = repo
+                .create_trigger(auto.id, &spec, Some("a".repeat(64)), None)
+                .await
+                .unwrap();
+
+            let now = Utc::now();
+            let old = repo
+                .create_automation_run_with_session(
+                    auto.id,
+                    project_id,
+                    user_id,
+                    Some(trigger.id),
+                    now,
+                    None,
+                    None,
+                    Some("old-key"),
+                )
+                .await
+                .unwrap();
+            let fresh = repo
+                .create_automation_run_with_session(
+                    auto.id,
+                    project_id,
+                    user_id,
+                    Some(trigger.id),
+                    now,
+                    None,
+                    None,
+                    Some("fresh-key"),
+                )
+                .await
+                .unwrap();
+
+            // Backdate the "old" run 25h into the past so it falls beyond a 24h cutoff.
+            let backdate =
+                (now - ChronoDuration::hours(25)).format("%Y-%m-%d %H:%M:%S%.3f").to_string();
+            sqlx::query("UPDATE automation_runs SET created_at = ? WHERE id = ?")
+                .bind(&backdate)
+                .bind(old.id.to_string())
+                .execute(&repo.pool)
+                .await
+                .unwrap();
+
+            let cutoff = now - ChronoDuration::hours(24);
+            let cleared = repo.clear_expired_idempotency_keys(cutoff).await.unwrap();
+            assert_eq!(cleared, 1, "exactly one expired row should be NULL'd");
+
+            // Old key released → lookup can no longer find it.
+            assert!(
+                repo.find_webhook_run_by_idempotency_key(trigger.id, "old-key")
+                    .await
+                    .unwrap()
+                    .is_none()
+            );
+            // Fresh key still resolves to its run.
+            let still_found = repo
+                .find_webhook_run_by_idempotency_key(trigger.id, "fresh-key")
+                .await
+                .unwrap()
+                .expect("fresh key should still be present");
+            assert_eq!(still_found.id, fresh.id);
+
+            // UNIQUE slot freed: same key may now be reused on a new run.
+            let reused = repo
+                .create_automation_run_with_session(
+                    auto.id,
+                    project_id,
+                    user_id,
+                    Some(trigger.id),
+                    now,
+                    None,
+                    None,
+                    Some("old-key"),
+                )
+                .await
+                .expect("reusing a NULL'd key must not trigger UNIQUE violation");
+            assert_ne!(reused.id, old.id);
+
+            // Second cleanup pass with the same cutoff is a no-op.
+            assert_eq!(repo.clear_expired_idempotency_keys(cutoff).await.unwrap(), 0);
         }
 
         #[tokio::test]

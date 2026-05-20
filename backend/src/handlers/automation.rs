@@ -2,8 +2,9 @@ use std::sync::Arc;
 
 use axum::{
     Json,
+    body::Bytes,
     extract::{Extension, Path, Query, State},
-    http::StatusCode,
+    http::{HeaderMap, StatusCode, header::AUTHORIZATION},
 };
 use chrono::Utc;
 use serde::Deserialize;
@@ -322,6 +323,7 @@ pub async fn create_run(
             Utc::now(),
             None,
             Some(&triggered_payload),
+            None,
         )
         .await
         .map_err(|e| AppError::internal(e.to_string()))?;
@@ -462,6 +464,128 @@ async fn require_nested_run_access(
     Ok(run)
 }
 
+// ── webhook firing (auth-exempt route) ───────────────────────────────────────
+
+/// POST /webhooks/automations
+/// Bearer token both identifies and authenticates: its SHA-256 hash is
+/// looked up against the unique partial index on
+/// `automation_triggers.webhook_token_hash`. JWT middleware is bypassed.
+/// An optional `Idempotency-Key` header dedupes per-trigger retries; expired
+/// keys are NULL'd by the housekeeper so they may be reused after the
+/// retention window.
+pub async fn fire_webhook_trigger(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    _body: Bytes,
+) -> ApiResult<(StatusCode, Json<serde_json::Value>)> {
+    // Generic 401 for missing header, unknown token, or trigger not found.
+    let presented_token = headers
+        .get(AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|s| s.strip_prefix("Bearer "))
+        .ok_or_else(|| AppError::unauthorized("invalid token"))?;
+
+    let presented_hash = sha256_hex(presented_token);
+    let trigger = state
+        .repository
+        .find_trigger_by_webhook_token_hash(&presented_hash)
+        .await
+        .map_err(|e| AppError::internal(e.to_string()))?
+        .ok_or_else(|| AppError::unauthorized("invalid token"))?;
+
+    if !trigger.enabled {
+        return Err(AppError::conflict("trigger is disabled"));
+    }
+
+    // Spec decode purely as a defensive guard — only webhook triggers carry a
+    // token hash, so reaching here means it must be Webhook variant.
+    let spec = TriggerSpec::from_db(trigger.kind, &trigger.spec_json)
+        .map_err(|e| AppError::internal(format!("trigger spec decode: {e}")))?;
+    let TriggerSpec::Webhook {} = spec else {
+        return Err(AppError::internal("webhook trigger spec mismatch"));
+    };
+
+    let idempotency_key = headers
+        .get("idempotency-key")
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_string());
+
+    // Pre-check: caller-supplied key has matched a still-valid run → replay.
+    if let Some(ref key) = idempotency_key {
+        if let Some(existing) = state
+            .repository
+            .find_webhook_run_by_idempotency_key(trigger.id, key)
+            .await
+            .map_err(|e| AppError::internal(e.to_string()))?
+        {
+            return Ok(webhook_accepted_response(&existing));
+        }
+    }
+
+    let automation = state
+        .repository
+        .get_automation(trigger.automation_id)
+        .await
+        .map_err(|e| AppError::internal(e.to_string()))?
+        .ok_or_else(|| AppError::internal("trigger's automation missing"))?;
+
+    let triggered_payload = json!({
+        "source": "webhook",
+        "trigger_id": trigger.id.to_string(),
+    });
+
+    let run = match state
+        .repository
+        .create_automation_run_with_session(
+            automation.id,
+            automation.project_id,
+            automation.created_by,
+            Some(trigger.id),
+            Utc::now(),
+            None,
+            Some(&triggered_payload),
+            idempotency_key.as_deref(),
+        )
+        .await
+    {
+        Ok(r) => r,
+        // Race fallback: a concurrent retry with the same key inserted first
+        // and our INSERT lost the UNIQUE check. Re-lookup and return that row.
+        Err(RepositoryError::UniqueViolation(_)) if idempotency_key.is_some() => {
+            let key = idempotency_key.as_ref().unwrap();
+            let existing = state
+                .repository
+                .find_webhook_run_by_idempotency_key(trigger.id, key)
+                .await
+                .map_err(|e| AppError::internal(e.to_string()))?
+                .ok_or_else(|| {
+                    AppError::internal("idempotency race: UNIQUE violation but no row found")
+                })?;
+            return Ok(webhook_accepted_response(&existing));
+        }
+        Err(e) => return Err(AppError::internal(e.to_string())),
+    };
+
+    tracing::info!(trigger = %trigger.id, run = %run.id, "webhook trigger fired");
+
+    Ok(webhook_accepted_response(&run))
+}
+
+fn webhook_accepted_response(
+    run: &crate::repository::DbAutomationRun,
+) -> (StatusCode, Json<serde_json::Value>) {
+    (
+        StatusCode::ACCEPTED,
+        Json(json!({
+            "run_id": run.id.to_string(),
+            "session_id": run.session_id.to_string(),
+            "status": "queued",
+        })),
+    )
+}
+
 fn generate_webhook_token() -> String {
     // 256 bits of entropy from two UUID v4s (random-source backed by OS RNG).
     let a = Uuid::new_v4().simple().to_string();
@@ -469,15 +593,16 @@ fn generate_webhook_token() -> String {
     format!("{a}{b}")
 }
 
-fn sha256_hex(s: &str) -> String {
+fn sha256_hex(s: impl AsRef<[u8]>) -> String {
     let mut hasher = Sha256::new();
-    hasher.update(s.as_bytes());
+    hasher.update(s.as_ref());
     hasher
         .finalize()
         .iter()
         .map(|b| format!("{b:02x}"))
         .collect()
 }
+
 
 #[cfg(test)]
 mod tests {

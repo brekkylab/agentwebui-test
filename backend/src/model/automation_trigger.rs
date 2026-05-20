@@ -39,10 +39,7 @@ pub enum TriggerSpec {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         tz: Option<String>,
     },
-    Webhook {
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        dedupe: Option<String>,
-    },
+    Webhook {},
 }
 
 impl TriggerSpec {
@@ -60,9 +57,7 @@ impl TriggerSpec {
                 "expr": expr,
                 "tz": tz,
             })),
-            TriggerSpec::Webhook { dedupe } => serde_json::to_string(&serde_json::json!({
-                "dedupe": dedupe,
-            })),
+            TriggerSpec::Webhook {} => serde_json::to_string(&serde_json::json!({})),
         }
     }
 
@@ -79,15 +74,7 @@ impl TriggerSpec {
                 let CronFields { expr, tz } = serde_json::from_str(spec_json)?;
                 Ok(TriggerSpec::Cron { expr, tz })
             }
-            TriggerKind::Webhook => {
-                #[derive(Deserialize, Default)]
-                struct WebhookFields {
-                    #[serde(default)]
-                    dedupe: Option<String>,
-                }
-                let WebhookFields { dedupe } = serde_json::from_str(spec_json).unwrap_or_default();
-                Ok(TriggerSpec::Webhook { dedupe })
-            }
+            TriggerKind::Webhook => Ok(TriggerSpec::Webhook {}),
         }
     }
 }

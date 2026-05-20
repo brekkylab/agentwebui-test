@@ -21,7 +21,7 @@ CREATE TABLE automations (
 CREATE INDEX idx_automations_project ON automations(project_id);
 
 -- kind ∈ {'cron','webhook'}, validated in code.
--- spec_json: cron -> {"expr","tz"}; webhook -> {"dedupe"}.
+-- spec_json: cron -> {"expr","tz"}; webhook -> {} (no fields in v1).
 CREATE TABLE automation_triggers (
     id                   TEXT PRIMARY KEY,
     automation_id        TEXT NOT NULL REFERENCES automations(id) ON DELETE CASCADE,
@@ -52,6 +52,9 @@ CREATE TABLE automation_runs (
     scheduled_for        TEXT NOT NULL,              -- earliest pickup time
     lease_until          TEXT,                       -- NULL when not leased; reaper uses this
     previous_run_id      TEXT REFERENCES automation_runs(id) ON DELETE SET NULL,
+    -- Caller-provided idempotency key for webhook-triggered runs. NULL for
+    -- manual / cron / non-keyed webhook fires.
+    idempotency_key      TEXT,
     created_at           TEXT NOT NULL,
     updated_at           TEXT NOT NULL
 );
@@ -60,6 +63,11 @@ CREATE INDEX idx_runs_trigger            ON automation_runs(trigger_id);
 CREATE INDEX idx_runs_status_scheduled   ON automation_runs(status, scheduled_for);
 CREATE INDEX idx_runs_lease              ON automation_runs(lease_until)
     WHERE status = 'running';
+-- Used for webhook idempotency lookups + acts as the final guard against
+-- concurrent webhook retries inserting duplicate runs.
+CREATE UNIQUE INDEX idx_runs_trigger_idempotency
+    ON automation_runs(trigger_id, idempotency_key)
+    WHERE idempotency_key IS NOT NULL;
 
 -- Append-only audit log. `ts` is the event time AND row insertion time, so no
 -- separate created_at. Conversation turns stay in session_messages; this table

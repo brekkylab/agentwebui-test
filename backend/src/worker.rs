@@ -2,9 +2,10 @@
 //! against the router agent in the run's session.
 //!
 //! Crash safety: each claimed run has its `lease_until` heartbeated by a
-//! companion task. If a heartbeat finds the row no longer ours (reaper
-//! requeued it) it cancels the in-flight agent. A separate reaper task
-//! periodically requeues expired-lease rows.
+//! companion task. If a heartbeat finds the row no longer ours (housekeeper
+//! requeued it) it cancels the in-flight agent. A separate housekeeper task
+//! periodically requeues expired-lease rows and NULLs idempotency keys past
+//! their retention window.
 
 use std::{
     sync::{
@@ -32,8 +33,10 @@ use crate::{
 const POLL_INTERVAL: Duration = Duration::from_secs(1);
 const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(30);
 const REAP_INTERVAL: Duration = Duration::from_secs(60);
+const IDEMPOTENCY_CLEANUP_INTERVAL: Duration = Duration::from_secs(60 * 60);
 const CRON_TICK_INTERVAL: Duration = Duration::from_secs(15);
 const LEASE_MINUTES: i64 = 3;
+const WEBHOOK_IDEMPOTENCY_RETENTION_HOURS: i64 = 24;
 
 /// Spawn `count` independent worker tasks. Each loops claim → execute.
 pub fn spawn_workers(state: Arc<AppState>, count: usize) {
@@ -44,21 +47,50 @@ pub fn spawn_workers(state: Arc<AppState>, count: usize) {
     tracing::info!(count, "automation workers spawned");
 }
 
-/// Recover leftover `running` rows from prior crashes, then loop reaping
-/// expired leases. Must be spawned once per process.
-pub fn spawn_reaper(state: Arc<AppState>) {
+/// Recover leftover `running` rows from prior crashes, then loop two
+/// independent periodic chores:
+///
+/// 1. **Reap** expired-lease `running` rows back to `queued` every
+///    `REAP_INTERVAL`.
+/// 2. **Cleanup** idempotency keys older than
+///    `WEBHOOK_IDEMPOTENCY_RETENTION_HOURS` every
+///    `IDEMPOTENCY_CLEANUP_INTERVAL`, releasing the UNIQUE-partial-index slot
+///    so callers can reuse the same `Idempotency-Key` after the window.
+///
+/// Must be spawned once per process.
+pub fn spawn_housekeeper(state: Arc<AppState>) {
     tokio::spawn(async move {
         match state.repository.reap_all_running().await {
             Ok(reaped) if !reaped.is_empty() => {
-                tracing::warn!(count = reaped.len(), "boot reap: requeued orphaned running rows");
+                tracing::warn!(
+                    count = reaped.len(),
+                    "boot reap: requeued orphaned running rows"
+                );
             }
             Ok(_) => {}
             Err(e) => tracing::error!("boot reap failed: {e}"),
         }
+
+        let mut reap_tick = tokio::time::interval(REAP_INTERVAL);
+        reap_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        // Discard the immediate first reap tick — boot reap above already ran.
+        reap_tick.tick().await;
+        let mut cleanup_tick = tokio::time::interval(IDEMPOTENCY_CLEANUP_INTERVAL);
+        cleanup_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        // Keep the immediate first cleanup tick — sweep on boot, then on cadence.
+
         loop {
-            tokio::time::sleep(REAP_INTERVAL).await;
-            if let Err(e) = reap_once(&state).await {
-                tracing::error!("reap failed: {e}");
+            tokio::select! {
+                _ = reap_tick.tick() => {
+                    if let Err(e) = reap_once(&state).await {
+                        tracing::error!("reap failed: {e}");
+                    }
+                }
+                _ = cleanup_tick.tick() => {
+                    if let Err(e) = idempotency_cleanup_once(&state, Utc::now()).await {
+                        tracing::error!("idempotency cleanup failed: {e}");
+                    }
+                }
             }
         }
     });
@@ -76,6 +108,22 @@ async fn reap_once(state: &Arc<AppState>) -> Result<(), String> {
     Ok(())
 }
 
+async fn idempotency_cleanup_once(
+    state: &Arc<AppState>,
+    now: chrono::DateTime<Utc>,
+) -> Result<(), String> {
+    let cutoff = now - chrono::Duration::hours(WEBHOOK_IDEMPOTENCY_RETENTION_HOURS);
+    let cleared = state
+        .repository
+        .clear_expired_idempotency_keys(cutoff)
+        .await
+        .map_err(|e| e.to_string())?;
+    if cleared > 0 {
+        tracing::info!(cleared, "idempotency keys NULL'd past retention");
+    }
+    Ok(())
+}
+
 /// Periodically scans for cron triggers whose `next_fire_at` has elapsed and
 /// fires them via the atomic `fire_cron_trigger` repo method.
 pub fn spawn_cron_ticker(state: Arc<AppState>) {
@@ -89,10 +137,7 @@ pub fn spawn_cron_ticker(state: Arc<AppState>) {
     });
 }
 
-async fn cron_tick_once(
-    state: &Arc<AppState>,
-    now: chrono::DateTime<Utc>,
-) -> Result<(), String> {
+async fn cron_tick_once(state: &Arc<AppState>, now: chrono::DateTime<Utc>) -> Result<(), String> {
     let due = state
         .repository
         .list_due_cron_triggers(now)
@@ -124,8 +169,8 @@ async fn fire_cron_trigger_once(
     };
     let default_tz = crate::cron::default_tz_name();
     let tz_name = tz.as_deref().unwrap_or(default_tz);
-    let next_fire = next_fire_after(expr, tz_name, now)
-        .map_err(|e| format!("compute next_fire_at: {e}"))?;
+    let next_fire =
+        next_fire_after(expr, tz_name, now).map_err(|e| format!("compute next_fire_at: {e}"))?;
     let payload = json!({
         "source": "cron",
         "trigger_id": trigger.id.to_string(),
@@ -177,8 +222,7 @@ async fn try_claim_and_execute(state: &Arc<AppState>) -> Result<bool, String> {
     // Belt: panic anywhere inside this scope unwinds the drop_guard → cancel.
     let _drop_guard = cancel.clone().drop_guard();
     let lease_lost = Arc::new(AtomicBool::new(false));
-    let mut heartbeat =
-        spawn_heartbeat(state.clone(), run.id, cancel.clone(), lease_lost.clone());
+    let mut heartbeat = spawn_heartbeat(state.clone(), run.id, cancel.clone(), lease_lost.clone());
 
     // Race execute_run against the heartbeat task; whichever ends first drives the flow.
     let agent_result = tokio::select! {
