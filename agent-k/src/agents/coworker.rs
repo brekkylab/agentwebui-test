@@ -75,6 +75,7 @@ pub async fn get_coworker_agent(
         guest: "/workspace/artifacts".into(),
         readonly: false,
     });
+    config.persist = true;
     let inst = COWORKER_INSTRUCTION
         .replace("{{NAME}}", name.as_ref())
         .replace("{{TIME}}", &now_utc_iso8601())
