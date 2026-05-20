@@ -36,7 +36,7 @@ pub fn get_coworker_cases() -> Vec<Case> {
         // Case 3
         Case {
             query: Message::new(Role::User).with_contents([Part::text(
-                "급여명세서 문서를 각각 한 페이지짜리 PDF로 분리해주세요.",
+                "급여명세서 문서를 각각 한 페이지짜리 PDF들로 분리해주세요.",
             )]),
             files: vec![(
                 include_bytes!("payslips.pdf").to_vec(),
