@@ -85,7 +85,7 @@ pub async fn get_coworker_agent(
     AgentBuilder::new(model.as_ref())
         .instruction(inst)
         .system_tools()
-        .web_search_tool()
+        .web_search_tool(vec![])
         .runenv(RunEnv::sandbox(config).await?)
         .build()
 }

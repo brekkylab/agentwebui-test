@@ -2,10 +2,7 @@ use std::path::PathBuf;
 
 use ailoy::message::{Message, Part, Role};
 
-pub struct Case {
-    pub query: Message,
-    pub files: Vec<(Vec<u8>, PathBuf)>,
-}
+use super::Case;
 
 pub fn get_coworker_cases() -> Vec<Case> {
     vec![
@@ -29,7 +26,7 @@ pub fn get_coworker_cases() -> Vec<Case> {
                 "Split payslip document into separate single-page PDFs.",
             )]),
             files: vec![(
-                include_bytes!("payslips.pdf").to_vec(),
+                include_bytes!("../payslips.pdf").to_vec(),
                 PathBuf::from("payslips.pdf"),
             )],
         },
@@ -39,7 +36,7 @@ pub fn get_coworker_cases() -> Vec<Case> {
                 "급여명세서 문서를 각각 한 페이지짜리 PDF들로 분리해주세요.",
             )]),
             files: vec![(
-                include_bytes!("payslips.pdf").to_vec(),
+                include_bytes!("../payslips.pdf").to_vec(),
                 PathBuf::from("payslips.pdf"),
             )],
         },
@@ -49,7 +46,7 @@ pub fn get_coworker_cases() -> Vec<Case> {
                 "Visualize co2.csv as a journal-submission-ready figure.",
             )]),
             files: vec![(
-                include_bytes!("co2.csv").to_vec(),
+                include_bytes!("../co2.csv").to_vec(),
                 PathBuf::from("co2.csv"),
             )],
         },
@@ -59,7 +56,7 @@ pub fn get_coworker_cases() -> Vec<Case> {
                 "co2.csv 를 저널 투고용 figure로 시각화해줘",
             )]),
             files: vec![(
-                include_bytes!("co2.csv").to_vec(),
+                include_bytes!("../co2.csv").to_vec(),
                 PathBuf::from("co2.csv"),
             )],
         },
@@ -77,11 +74,11 @@ pub fn get_coworker_cases() -> Vec<Case> {
             )]),
             files: vec![
                 (
-                    include_bytes!("receipt_1.png").to_vec(),
+                    include_bytes!("../receipt_1.png").to_vec(),
                     PathBuf::from("receipt_1.png"),
                 ),
                 (
-                    include_bytes!("receipt_2.png").to_vec(),
+                    include_bytes!("../receipt_2.png").to_vec(),
                     PathBuf::from("receipt_2.png"),
                 ),
             ],
@@ -100,11 +97,11 @@ pub fn get_coworker_cases() -> Vec<Case> {
             )]),
             files: vec![
                 (
-                    include_bytes!("receipt_1.png").to_vec(),
+                    include_bytes!("../receipt_1.png").to_vec(),
                     PathBuf::from("receipt_1.png"),
                 ),
                 (
-                    include_bytes!("receipt_2.png").to_vec(),
+                    include_bytes!("../receipt_2.png").to_vec(),
                     PathBuf::from("receipt_2.png"),
                 ),
             ],
