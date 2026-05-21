@@ -615,8 +615,8 @@ mod tests {
             let new_lease = claim_time + ChronoDuration::minutes(5);
             assert!(repo.renew_lease(claimed.id, new_lease).await.unwrap());
 
-            // Mark as failed → lease no longer renewable.
-            repo.update_run_status(claimed.id, RunStatus::Failed, true)
+            // Finalize as failed → lease no longer renewable.
+            repo.finalize_run(claimed.id, RunStatus::Failed, EventKind::Failed, None)
                 .await
                 .unwrap();
             assert!(!repo.renew_lease(claimed.id, new_lease).await.unwrap());

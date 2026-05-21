@@ -13,15 +13,10 @@ pub enum EventKind {
     Started,
     Succeeded,
     Failed,
-    Cancelled,
-    Timeout,
     RetryScheduled,
     LeaseLost,
     StepStarted,
     StepFinished,
-    TurnStarted,
-    TurnFinished,
-    ToolInvoked,
 }
 
 impl EventKind {
@@ -32,15 +27,10 @@ impl EventKind {
             EventKind::Started => "started",
             EventKind::Succeeded => "succeeded",
             EventKind::Failed => "failed",
-            EventKind::Cancelled => "cancelled",
-            EventKind::Timeout => "timeout",
             EventKind::RetryScheduled => "retry_scheduled",
             EventKind::LeaseLost => "lease_lost",
             EventKind::StepStarted => "step_started",
             EventKind::StepFinished => "step_finished",
-            EventKind::TurnStarted => "turn_started",
-            EventKind::TurnFinished => "turn_finished",
-            EventKind::ToolInvoked => "tool_invoked",
         }
     }
 
@@ -51,15 +41,10 @@ impl EventKind {
             "started" => Some(EventKind::Started),
             "succeeded" => Some(EventKind::Succeeded),
             "failed" => Some(EventKind::Failed),
-            "cancelled" => Some(EventKind::Cancelled),
-            "timeout" => Some(EventKind::Timeout),
             "retry_scheduled" => Some(EventKind::RetryScheduled),
             "lease_lost" => Some(EventKind::LeaseLost),
             "step_started" => Some(EventKind::StepStarted),
             "step_finished" => Some(EventKind::StepFinished),
-            "turn_started" => Some(EventKind::TurnStarted),
-            "turn_finished" => Some(EventKind::TurnFinished),
-            "tool_invoked" => Some(EventKind::ToolInvoked),
             _ => None,
         }
     }

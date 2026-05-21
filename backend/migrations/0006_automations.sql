@@ -20,7 +20,7 @@ CREATE TABLE automations (
 );
 CREATE INDEX idx_automations_project ON automations(project_id);
 
--- kind ∈ {'cron','webhook'}, validated in code.
+-- kind validated in code.
 -- spec_json: cron -> {"expr","tz"}; webhook -> {} (no fields in v1).
 CREATE TABLE automation_triggers (
     id                   TEXT PRIMARY KEY,
@@ -48,7 +48,7 @@ CREATE TABLE automation_runs (
     automation_id        TEXT NOT NULL REFERENCES automations(id) ON DELETE CASCADE,
     trigger_id           TEXT REFERENCES automation_triggers(id) ON DELETE SET NULL,
     session_id           TEXT NOT NULL UNIQUE REFERENCES sessions(id) ON DELETE CASCADE,
-    status               TEXT NOT NULL,              -- queued|running|succeeded|failed|cancelled|timeout
+    status               TEXT NOT NULL,
     scheduled_for        TEXT NOT NULL,              -- earliest pickup time
     lease_until          TEXT,                       -- NULL when not leased; reaper uses this
     previous_run_id      TEXT REFERENCES automation_runs(id) ON DELETE SET NULL,

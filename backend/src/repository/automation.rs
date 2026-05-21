@@ -516,22 +516,6 @@ impl SqliteRepository {
         rows.iter().map(Self::row_to_db_trigger).collect()
     }
 
-    pub async fn set_trigger_next_fire_at(
-        &self,
-        id: Uuid,
-        next: Option<DateTime<Utc>>,
-    ) -> RepositoryResult<()> {
-        let now = Self::now_string();
-        let nfa = next.map(Self::ts_string);
-        sqlx::query("UPDATE automation_triggers SET next_fire_at = ?, updated_at = ? WHERE id = ?")
-            .bind(&nfa)
-            .bind(&now)
-            .bind(id.to_string())
-            .execute(&self.pool)
-            .await?;
-        Ok(())
-    }
-
     // automation_runs
 
     pub async fn create_run(
@@ -1004,27 +988,6 @@ impl SqliteRepository {
             created_at: Self::parse_timestamp(now.clone(), "automation_runs.created_at")?,
             updated_at: Self::parse_timestamp(now, "automation_runs.updated_at")?,
         })
-    }
-
-    pub async fn update_run_status(
-        &self,
-        run_id: Uuid,
-        status: RunStatus,
-        clear_lease: bool,
-    ) -> RepositoryResult<()> {
-        let now = Self::now_string();
-        let sql = if clear_lease {
-            "UPDATE automation_runs SET status = ?, lease_until = NULL, updated_at = ? WHERE id = ?"
-        } else {
-            "UPDATE automation_runs SET status = ?, updated_at = ? WHERE id = ?"
-        };
-        sqlx::query(sql)
-            .bind(status.as_str())
-            .bind(&now)
-            .bind(run_id.to_string())
-            .execute(&self.pool)
-            .await?;
-        Ok(())
     }
 
     /// Move all `running` rows back to `queued` unconditionally and emit

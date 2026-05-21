@@ -12,8 +12,6 @@ pub enum RunStatus {
     Running,
     Succeeded,
     Failed,
-    Cancelled,
-    Timeout,
 }
 
 impl RunStatus {
@@ -23,8 +21,6 @@ impl RunStatus {
             RunStatus::Running => "running",
             RunStatus::Succeeded => "succeeded",
             RunStatus::Failed => "failed",
-            RunStatus::Cancelled => "cancelled",
-            RunStatus::Timeout => "timeout",
         }
     }
 
@@ -34,17 +30,8 @@ impl RunStatus {
             "running" => Some(RunStatus::Running),
             "succeeded" => Some(RunStatus::Succeeded),
             "failed" => Some(RunStatus::Failed),
-            "cancelled" => Some(RunStatus::Cancelled),
-            "timeout" => Some(RunStatus::Timeout),
             _ => None,
         }
-    }
-
-    pub fn is_terminal(&self) -> bool {
-        matches!(
-            self,
-            RunStatus::Succeeded | RunStatus::Failed | RunStatus::Cancelled | RunStatus::Timeout
-        )
     }
 }
 
