@@ -62,9 +62,10 @@ pub fn get_router(state: Arc<AppState>) -> ApiRouter {
         )
         .api_route(
             "/projects/{project_id}/dirents",
-            // Body limit disabled only for upload; GET list has no body.
+            // Body limit disabled only for upload; PATCH batch_op carries a small JSON body.
             post(handlers::upload.layer(axum::extract::DefaultBodyLimit::disable()))
-                .get(handlers::list),
+                .get(handlers::list)
+                .patch(handlers::batch_op),
         )
         .api_route(
             "/projects/{project_id}/dirents/{*path}",
@@ -160,6 +161,11 @@ pub fn get_router(state: Arc<AppState>) -> ApiRouter {
         post(handlers::fire_webhook_trigger),
     );
 
+    // /ws uses plain axum routing: WebSocketUpgrade doesn't implement aide's OperationInput.
+    let ws_route = ApiRouter::new()
+        .route("/ws", axum::routing::get(handlers::ws_handler))
+        .with_state(state.clone());
+
     ApiRouter::new()
         .merge(auth_routes)
         .merge(me_routes)
@@ -169,5 +175,6 @@ pub fn get_router(state: Arc<AppState>) -> ApiRouter {
         .merge(automation_routes)
         .merge(document_routes)
         .merge(webhook_routes)
+        .merge(ws_route)
         .with_state(state)
 }

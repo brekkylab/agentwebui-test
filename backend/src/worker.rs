@@ -15,7 +15,7 @@ use std::{
     time::Duration,
 };
 
-use ailoy::message::{Message, Part, Role};
+use ailoy::message::{Message, MessageOutput, Part, Role};
 use chrono::Utc;
 use futures_util::StreamExt;
 use serde_json::json;
@@ -24,9 +24,9 @@ use uuid::Uuid;
 
 use crate::{
     cron::next_fire_after,
-    handlers::session::{build_agent, build_sandbox},
+    handlers::session::{build_agent, build_sandbox, classify_senders_from_outputs},
     model::{EventKind, RunStatus, TriggerSpec},
-    repository::DbAutomationRun,
+    repository::{DbAutomationRun, NewSessionMessage},
     state::AppState,
 };
 
@@ -414,6 +414,7 @@ async fn execute_run(
 
         let msg = Message::new(Role::User).with_contents([Part::text(prompt.clone())]);
         let mut stream = agent.run(msg);
+        let mut outputs: Vec<MessageOutput> = Vec::new();
         let mut step_err: Option<String> = None;
         let mut cancelled = false;
         loop {
@@ -425,7 +426,10 @@ async fn execute_run(
                 next = stream.next() => {
                     match next {
                         None => break,
-                        Some(Ok(_)) => continue,
+                        Some(Ok(o)) => {
+                            outputs.push(o);
+                            continue;
+                        }
                         Some(Err(e)) => {
                             step_err = Some(e.to_string());
                             break;
@@ -439,7 +443,23 @@ async fn execute_run(
         let new_msgs = agent.get_history()[prev_len..].to_vec();
         drop(agent);
 
-        repo.append_messages(run.session_id, &new_msgs)
+        // Attribute the prompt to the automation's creator (User-kind) and any
+        // agent outputs to the agent (Agent-kind). The same classify helper
+        // that send_message uses keeps subagent attribution consistent.
+        let senders = classify_senders_from_outputs(&outputs, automation.created_by);
+        let to_persist: Vec<NewSessionMessage> = new_msgs
+            .into_iter()
+            .zip(senders)
+            .map(
+                |(message, (sender_kind, sender_name, sender_user_id))| NewSessionMessage {
+                    message,
+                    sender_kind,
+                    sender_name,
+                    sender_user_id,
+                },
+            )
+            .collect();
+        repo.append_messages(run.session_id, &to_persist)
             .await
             .map_err(|e| e.to_string())?;
 

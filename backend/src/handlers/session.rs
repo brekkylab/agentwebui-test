@@ -1,11 +1,10 @@
 use std::{convert::Infallible, sync::Arc};
 
-use agent_k::agents::SpeedwagonSpec;
 use aide::NoApi;
 use ailoy::{
-    agent::{Agent, AgentBuilder, AgentCard},
+    agent::{Agent, AgentBuilder, AgentCard, AgentSpec},
     message::{Message, MessageOutput, Part, Role},
-    runenv::{Sandbox, SandboxConfig, VolumeMount},
+    runenv::{RunEnv, Sandbox, SandboxConfig, VolumeMount},
 };
 use axum::{
     Json,
@@ -20,14 +19,17 @@ use crate::{
     auth::AuthUser,
     error::{ApiResult, AppError},
     model::{
-        CreateSessionRequest, SendMessageRequest, SendMessageResponse, SessionListResponse,
-        SessionResponse, UpdateSessionRequest,
+        CreateSessionRequest, MessageSender, SendMessageRequest, SendMessageResponse,
+        SessionListResponse, SessionMessageListResponse, SessionMessageResponse, SessionResponse,
+        UpdateSessionRequest,
     },
-    repository::SessionAccess,
+    repository::{DbSenderKind, NewSessionMessage, SessionAccess},
+    services::session_title::generate_session_title,
     state::AppState,
 };
 
-const DEFAULT_MODEL: &str = "openai/gpt-5.4-mini";
+const DEFAULT_MODEL: &str = "anthropic/claude-haiku-4-5";
+const TOP_LEVEL_AGENT_NAME: &str = "agent-k";
 
 pub(crate) fn sandbox_name_for(id: &Uuid) -> String {
     let s = id.simple().to_string();
@@ -38,7 +40,7 @@ pub(crate) async fn build_sandbox(
     state: &Arc<AppState>,
     project_id: Uuid,
     session_id: Uuid,
-) -> Result<Sandbox, String> {
+) -> Result<RunEnv, String> {
     let uploads_host = state
         .data_root
         .join("projects")
@@ -61,25 +63,28 @@ pub(crate) async fn build_sandbox(
         volumes,
         ..Default::default()
     };
-    Sandbox::new(cfg).await.map_err(|e| e.to_string())
+    RunEnv::sandbox(cfg).await.map_err(|e| e.to_string())
 }
 
-pub(crate) async fn build_agent(sandbox: Sandbox) -> Result<Agent, String> {
-    let sw_card = AgentCard {
-        name: "speedwagon".into(),
-        description: "Search the knowledge base for answers. \
-            This tool has access to uploaded documents that may contain \
-            information the model doesn't have. \
-            Use it for any question that could be answered from the knowledge base."
-            .into(),
-        skills: vec![],
-    };
-    let sw_spec = SpeedwagonSpec::new().card(sw_card.clone()).into_spec();
+pub(crate) async fn build_agent(runenv: RunEnv) -> Result<Agent, String> {
+    // TODO: Remove the subagent. This is added for testing frontend UI.
+    let math_spec = AgentSpec::new(DEFAULT_MODEL)
+        .instruction(
+            "You are a math expert. Solve any mathematical problem step by step, \
+            showing your reasoning clearly. Return the final answer at the end.",
+        )
+        .card(AgentCard {
+            name: "math".into(),
+            description: "Solve mathematical problems step by step. \
+                Use for arithmetic, algebra, calculus, statistics, or any numeric reasoning."
+                .into(),
+            skills: vec![],
+        });
 
     AgentBuilder::new(DEFAULT_MODEL)
         .instruction(concat!(
             "You are a versatile assistant with access to code execution tools ",
-            "(bash, python), web search, and a knowledge base (speedwagon). ",
+            "(bash, python), web search, and a math subagent. ",
             "Your working directory is /workspace, which is read-write — you can freely ",
             "create, edit, and delete files there for intermediate work, scripts, and results. ",
             "Project files uploaded by the user are available read-only at /workspace/.uploads/. ",
@@ -87,17 +92,50 @@ pub(crate) async fn build_agent(sandbox: Sandbox) -> Result<Agent, String> {
             "`cat /workspace/.uploads/<path>` to read them. ",
             "To modify or analyse uploaded files, copy them into /workspace first. ",
             "New uploads appear in /workspace/.uploads immediately without restarting. ",
-            "You MUST use the speedwagon tool to search the document corpus ",
-            "before answering ANY factual question — even if you think you already know the answer. ",
+            "You MUST delegate ALL math and numeric problems to the math tool. ",
             "Use bash and python tools for computation, data analysis, and code execution tasks. ",
             "Only skip tools for greetings or casual conversation.",
         ))
         .system_tools()
-        .web_search_tool()
-        .runenv(sandbox)
-        .subagent(sw_spec)
+        .web_search_tool(vec![])
+        .runenv(runenv)
+        .subagent(math_spec)
         .build()
         .map_err(|e| e.to_string())
+}
+
+/// Attribute each persisted message to a sender using `MessageOutput` metadata.
+///
+/// `agent.get_history()[prev_len..]` always starts with the user query (pushed
+/// by `Agent::run` before any outputs are emitted), followed by one entry per
+/// depth-0 `MessageOutput` in emission order.  This function mirrors that layout:
+/// the first sender is always the user; subsequent senders are derived from the
+/// depth-0 outputs via `source_agent` (set by ailoy's `stamp_source_agent`).
+///
+/// Depth ≥ 1 outputs are skipped because ailoy does not push them into history.
+pub(crate) fn classify_senders_from_outputs(
+    outputs: &[MessageOutput],
+    user_id: Uuid,
+) -> Vec<(DbSenderKind, Option<String>, Option<Uuid>)> {
+    let mut senders = vec![(DbSenderKind::User, None, Some(user_id))];
+
+    for output in outputs {
+        if !matches!(output.depth, None | Some(0)) {
+            continue;
+        }
+        match output.message.role {
+            Role::User => continue,
+            _ => {
+                let name = output
+                    .source_agent
+                    .clone()
+                    .unwrap_or_else(|| TOP_LEVEL_AGENT_NAME.to_string());
+                senders.push((DbSenderKind::Agent, Some(name), None));
+            }
+        }
+    }
+
+    senders
 }
 
 async fn resolve_agent_for(
@@ -109,11 +147,12 @@ async fn resolve_agent_for(
         return Ok(arc);
     }
 
-    let history = state
+    let rows = state
         .repository
         .get_messages(session_id)
         .await
         .map_err(|e| AppError::internal(e.to_string()))?;
+    let history: Vec<Message> = rows.into_iter().map(|r| r.message).collect();
 
     let sandbox = build_sandbox(state, project_id, session_id)
         .await
@@ -177,7 +216,10 @@ pub async fn create_session(
     state.insert_agent(session.id, agent);
 
     tracing::info!(id = %session.id, sandbox = %sandbox_name, "session created");
-    Ok((StatusCode::CREATED, Json(SessionResponse::from(session))))
+    Ok((
+        StatusCode::CREATED,
+        Json(SessionResponse::from_db(session, 0)),
+    ))
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema, Default)]
@@ -216,9 +258,21 @@ pub async fn list_sessions(
             .map_err(|e| AppError::internal(e.to_string()))?,
     };
 
-    Ok(Json(SessionListResponse {
-        items: sessions.into_iter().map(SessionResponse::from).collect(),
-    }))
+    let session_ids: Vec<Uuid> = sessions.iter().map(|s| s.id).collect();
+    let unread_map = state
+        .repository
+        .count_unread_batch_for_user(&session_ids, auth_user.id)
+        .await
+        .map_err(|e| AppError::internal(e.to_string()))?;
+    let items: Vec<SessionResponse> = sessions
+        .into_iter()
+        .map(|s| {
+            let unread = unread_map.get(&s.id).copied().unwrap_or(0);
+            SessionResponse::from_db(s, unread)
+        })
+        .collect();
+
+    Ok(Json(SessionListResponse { items }))
 }
 
 /// GET /sessions/{session_id}
@@ -234,7 +288,13 @@ pub async fn get_session(
         .map_err(|e| AppError::internal(e.to_string()))?
         .ok_or_else(|| AppError::not_found("session not found or access denied"))?;
 
-    Ok(Json(SessionResponse::from(session)))
+    let unread = state
+        .repository
+        .count_session_unread(session_id, auth_user.id)
+        .await
+        .map_err(|e| AppError::internal(e.to_string()))?;
+
+    Ok(Json(SessionResponse::from_db(session, unread)))
 }
 
 /// PATCH /sessions/{session_id} — share_mode change (creator or project owner)
@@ -261,7 +321,13 @@ pub async fn update_session(
         .await
         .map_err(|e| AppError::internal(e.to_string()))?;
 
-    Ok(Json(SessionResponse::from(updated)))
+    let unread = state
+        .repository
+        .count_session_unread(session_id, auth_user.id)
+        .await
+        .map_err(|e| AppError::internal(e.to_string()))?;
+
+    Ok(Json(SessionResponse::from_db(updated, unread)))
 }
 
 pub(crate) async fn cleanup_session_resources(state: &Arc<AppState>, session_id: Uuid) {
@@ -333,6 +399,12 @@ pub async fn fork_session(
         .await
         .map_err(|e| AppError::internal(e.to_string()))?;
 
+    // Mark the forked session as fully read for the creator
+    let _ = state
+        .repository
+        .mark_session_read(new_id, auth_user.id)
+        .await;
+
     let source_cfg = SandboxConfig {
         name: Some(sandbox_name_for(&source_session_id)),
         persist: true,
@@ -364,7 +436,7 @@ pub async fn fork_session(
             );
             Ok((
                 StatusCode::CREATED,
-                Json(SessionResponse::from(new_session)),
+                Json(SessionResponse::from_db(new_session, 0)),
             ))
         }
         Err(e) => {
@@ -382,21 +454,50 @@ pub async fn get_message_history(
     State(state): State<Arc<AppState>>,
     Extension(auth_user): Extension<AuthUser>,
     Path(session_id): Path<Uuid>,
-) -> ApiResult<Json<Vec<Message>>> {
-    let _ = state
+) -> ApiResult<Json<SessionMessageListResponse>> {
+    let (_session, _access) = state
         .repository
         .get_session_with_authz(session_id, auth_user.id)
         .await
         .map_err(|e| AppError::internal(e.to_string()))?
         .ok_or_else(|| AppError::not_found("session not found or access denied"))?;
 
-    let messages = state
+    let rows = state
         .repository
         .get_messages(session_id)
         .await
         .map_err(|e| AppError::internal(e.to_string()))?;
 
-    Ok(Json(messages))
+    let items = rows
+        .into_iter()
+        .map(|r| -> ApiResult<SessionMessageResponse> {
+            let sender = match r.sender_kind {
+                DbSenderKind::User => MessageSender::User {
+                    user_id: r
+                        .sender_user_id
+                        .ok_or_else(|| AppError::internal("user message missing sender_user_id"))?,
+                },
+                DbSenderKind::Agent => MessageSender::Agent {
+                    name: r
+                        .sender_name
+                        .unwrap_or_else(|| TOP_LEVEL_AGENT_NAME.to_string()),
+                },
+            };
+            Ok(SessionMessageResponse {
+                message: r.message,
+                sender,
+                created_at: r.created_at,
+            })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+
+    // Auto-mark all messages as read for this user
+    let _ = state
+        .repository
+        .mark_session_read(session_id, auth_user.id)
+        .await;
+
+    Ok(Json(SessionMessageListResponse { items }))
 }
 
 /// DELETE /sessions/{session_id}/messages — creator or project owner
@@ -455,6 +556,30 @@ pub async fn send_message(
         return Err(AppError::forbidden("read-only access to this session"));
     }
 
+    let need_title = session.title.is_none();
+    let project_id = session.project_id;
+
+    // Spawn title generation immediately — runs concurrently with the agent run
+    if need_title {
+        let repo_title = state.repository.clone();
+        let ws_tx = state.ws_tx.clone();
+        let first_msg = payload.content.clone();
+        tokio::spawn(async move {
+            let title = generate_session_title(&first_msg).await;
+            if repo_title
+                .set_session_title(session_id, &title)
+                .await
+                .is_ok()
+            {
+                let _ = ws_tx.send(crate::events::WsEvent::SessionTitleUpdated {
+                    session_id: session_id.to_string(),
+                    project_id: project_id.to_string(),
+                    title,
+                });
+            }
+        });
+    }
+
     let agent_arc = resolve_agent_for(&state, session.id, session.project_id).await?;
 
     let mut agent = agent_arc
@@ -472,11 +597,30 @@ pub async fn send_message(
     let new_messages = agent.get_history()[prev_len..].to_vec();
     drop(agent);
 
+    let senders = classify_senders_from_outputs(&outputs, auth_user.id);
+    let to_persist: Vec<NewSessionMessage> = new_messages
+        .into_iter()
+        .zip(senders)
+        .map(
+            |(message, (sender_kind, sender_name, sender_user_id))| NewSessionMessage {
+                message,
+                sender_kind,
+                sender_name,
+                sender_user_id,
+            },
+        )
+        .collect();
+
     state
         .repository
-        .append_messages(session_id, &new_messages)
+        .append_messages(session_id, &to_persist)
         .await
         .map_err(|e| AppError::internal(e.to_string()))?;
+
+    let _ = state
+        .repository
+        .mark_session_read(session_id, auth_user.id)
+        .await;
 
     Ok(Json(outputs))
 }
@@ -513,6 +657,33 @@ pub async fn send_message_stream(
     let prev_len = guard.get_history().len();
     let repo = state.repository.clone();
     let content = payload.content;
+    let need_title = session.title.is_none();
+    let sender_id = auth_user.id;
+    let project_id = session.project_id;
+
+    // Spawn title generation immediately — runs concurrently with the agent stream
+    if need_title {
+        let repo_title = repo.clone();
+        let ws_tx = state.ws_tx.clone();
+        let first_msg = content.clone();
+        tokio::spawn(async move {
+            tracing::info!("starting title generation");
+            let title = generate_session_title(&first_msg).await;
+            tracing::info!("title generation finished");
+            if repo_title
+                .set_session_title(session_id, &title)
+                .await
+                .is_ok()
+            {
+                tracing::info!("send title via websocket");
+                let _ = ws_tx.send(crate::events::WsEvent::SessionTitleUpdated {
+                    session_id: session_id.to_string(),
+                    project_id: project_id.to_string(),
+                    title,
+                });
+            }
+        });
+    }
 
     let stream = async_stream::stream! {
         let mut agent = guard;  // OwnedMutexGuard moved in — lock held for stream lifetime
@@ -520,9 +691,13 @@ pub async fn send_message_stream(
         let mut run = agent.run(msg);
 
         let mut run_error: Option<String> = None;
+        let mut depth0_outputs: Vec<MessageOutput> = Vec::new();
         while let Some(item) = run.next().await {
             match item {
                 Ok(output) => {
+                    if matches!(output.depth, None | Some(0)) {
+                        depth0_outputs.push(output.clone());
+                    }
                     let json = serde_json::to_string(&output)
                         .unwrap_or_else(|e| format!("{{\"error\":\"{e}\"}}"));
                     yield Ok::<Event, Infallible>(
@@ -548,10 +723,26 @@ pub async fn send_message_stream(
         let new_msgs = agent.get_history()[prev_len..].to_vec();
         drop(agent);  // Release OwnedMutexGuard
 
-        if let Err(e) = repo.append_messages(session_id, &new_msgs).await {
+        let senders = classify_senders_from_outputs(&depth0_outputs, sender_id);
+        let to_persist: Vec<NewSessionMessage> = new_msgs
+            .into_iter()
+            .zip(senders)
+            .map(|(message, (sender_kind, sender_name, sender_user_id))| NewSessionMessage {
+                message,
+                sender_kind,
+                sender_name,
+                sender_user_id,
+            })
+            .collect();
+
+        if let Err(e) = repo.append_messages(session_id, &to_persist).await {
             tracing::error!(%session_id, "failed to persist messages: {e}");
         }
 
+        // Auto-mark sender as having read
+        let _ = repo.mark_session_read(session_id, sender_id).await;
+
+        tracing::info!("message stream finished");
         yield Ok(Event::default().event("done").data("[DONE]"));
     };
 

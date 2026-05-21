@@ -1,0 +1,112 @@
+/* Cowork chat-prose styling — prose locked to the design system tokens.
+   Refined-minimalist: small but readable, mono for code, tight headings. */
+
+.cw-md { color: var(--cw-ink); font-size: 14px; line-height: 1.68; }
+.cw-md > * + * { margin-top: 10px; }
+.cw-md h1, .cw-md h2, .cw-md h3 {
+  margin: 16px 0 6px;
+  letter-spacing: -0.018em;
+  font-weight: 600;
+  color: var(--cw-ink);
+}
+.cw-md h1 { font-size: 18px; }
+.cw-md h2 { font-size: 16px; }
+.cw-md h3 { font-size: 14.5px; color: var(--cw-ink-2); }
+.cw-md p { margin: 0; }
+.cw-md ul, .cw-md ol { margin: 4px 0 0; padding-left: 1.4em; }
+.cw-md li + li { margin-top: 4px; }
+.cw-md blockquote {
+  margin: 8px 0;
+  padding: 6px 12px;
+  border-left: 2px solid var(--cw-paper-4);
+  color: var(--cw-ink-2);
+}
+.cw-md hr { border: 0; border-top: 1px solid var(--cw-line-soft); margin: 14px 0; }
+.cw-md a { color: var(--cw-accent); text-decoration: underline; text-underline-offset: 2px; }
+.cw-md-inline-code {
+  font-family: var(--cw-font-mono);
+  font-size: 12.5px;
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: var(--cw-paper-3);
+  color: var(--cw-ink);
+}
+.cw-md pre {
+  margin: 6px 0;
+  padding: 12px 14px;
+  border-radius: 10px;
+  background: var(--cw-paper-3);
+  border: 1px solid var(--cw-line-soft);
+  overflow-x: auto;
+  font-family: var(--cw-font-mono);
+  font-size: 12.5px;
+  line-height: 1.55;
+}
+.cw-md pre code { background: transparent; padding: 0; border-radius: 0; }
+.cw-md table {
+  border-collapse: collapse;
+  width: 100%;
+  font-size: 12.5px;
+}
+.cw-md th, .cw-md td {
+  border-bottom: 1px solid var(--cw-line-soft);
+  padding: 6px 10px;
+  text-align: left;
+}
+.cw-md th { color: var(--cw-ink-2); font-weight: 500; }
+
+/* Tool call collapsible — collapsed chip under the parent assistant message. */
+.cw-toolcall {
+  margin-top: 6px;
+  border: 1px solid var(--cw-paper-4);
+  border-radius: 6px;
+  padding: 6px 10px;
+  font-family: var(--cw-font-mono);
+  font-size: 11.5px;
+  background: var(--cw-paper-2);
+}
+.cw-toolcall > summary {
+  cursor: pointer;
+  color: var(--cw-ink-3);
+  list-style: none;
+  user-select: none;
+}
+.cw-toolcall > summary::-webkit-details-marker { display: none; }
+.cw-toolcall > summary::marker { display: none; }
+.cw-toolcall[open] > summary { color: var(--cw-ink); margin-bottom: 6px; }
+.cw-toolcall-args,
+.cw-toolcall-result {
+  margin: 4px 0;
+  padding: 6px 8px;
+  background: var(--cw-paper-3);
+  border-radius: 4px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 240px;
+  overflow: auto;
+  font-size: 11px;
+}
+.cw-toolcall-args { opacity: 0.85; }
+
+/* Subagent mention — "@math <query>" inline line under parent assistant message. */
+.cw-subagent-call {
+  margin-top: 6px;
+  font-size: 13px;
+  color: var(--cw-ink-2);
+}
+.cw-subagent-mention {
+  font-weight: 600;
+  color: var(--cw-accent);
+}
+
+
+.cw-message-error {
+  margin-top: 6px;
+  padding: 8px 12px;
+  border-radius: 10px;
+  background: color-mix(in oklch, var(--cw-destructive), white 88%);
+  border: 1px solid color-mix(in oklch, var(--cw-destructive), white 70%);
+  color: oklch(0.4 0.15 25);
+  font-size: 12px;
+  font-family: var(--cw-font-mono);
+}

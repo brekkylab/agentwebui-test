@@ -9,7 +9,10 @@ pub use automation::{
     DbAutomation, DbAutomationRun, DbAutomationRunEvent, DbAutomationTrigger,
 };
 pub use project::{DbProject, DbProjectMember};
-pub use session::{DbSession, SessionAccess, SessionOrigin, ShareMode};
+pub use session::{
+    DbSenderKind, DbSession, DbSessionMessage, NewSessionMessage, SessionAccess, SessionOrigin,
+    ShareMode,
+};
 pub use sqlite::SqliteRepository;
 use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous};
 use thiserror::Error;

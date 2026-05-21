@@ -1,9 +1,11 @@
 pub mod auth;
 pub mod cron;
 pub mod error;
+pub mod events;
 pub mod handlers;
 pub mod model;
 pub mod repository;
 pub mod router;
+pub mod services;
 pub mod state;
 pub mod worker;
