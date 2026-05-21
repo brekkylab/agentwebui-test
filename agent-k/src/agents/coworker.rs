@@ -1,7 +1,7 @@
 use std::path::Path;
 
 use ailoy::{
-    agent::{Agent, AgentBuilder},
+    agent::{Agent, AgentSpec},
     runenv::{RunEnv, SandboxConfig, VolumeMount},
 };
 
@@ -82,10 +82,14 @@ pub async fn get_coworker_agent(
         .replace("{{HOME}}", "/workspace")
         .replace("{{OS}}", "Debian GNU/Linux 13 (trixie)");
 
-    AgentBuilder::new(model.as_ref())
+    // Note: bypassing AgentBuilder because it does not expose max_tokens.
+    // ailoy's Anthropic adapter defaults to 8192, which truncates large
+    // tool-call arguments (e.g. python-pptx scripts). Bump to 32000 so Claude
+    // Opus can finish writing big `content` payloads in a single turn.
+    let spec = AgentSpec::new(model.as_ref())
         .instruction(inst)
         .system_tools()
         .web_search_tool()
-        .runenv(RunEnv::sandbox(config).await?)
-        .build()
+        .max_tokens(32_000);
+    Agent::try_with_runenv(spec, RunEnv::sandbox(config).await?)
 }
