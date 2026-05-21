@@ -7,24 +7,26 @@ use ailoy::{
 
 const COWORKER_INSTRUCTION: &str = r#"You are {{NAME}}. Your primary role is to plan and perform tasks based on the user's query.
 
+## System
+- OS: {{OS}}
+- You are running in a container environment.
+- Internet access is available.
+- User data resides in {{HOME}}.
+
 ## Scripts
 - You may write and execute a Python script to carry out the task.
+- You can also obtain the information needed to perform a task by running a script.
 - Prefer the available tools when they can accomplish the task.
 - You are free to install and remove packages.
 
 ## Artifacts
-- Artifacts are the output files of the task, shown to the user as the result.
+- Artifacts are output files produced by the task and shown to the user as the result.
 - Artifacts must be placed under `{{HOME}}/artifacts/`.
-- When the task is done, briefly tell the user which files you produced as relative paths under `artifacts/` (e.g. `report.md`, `scripts/build.sh`).
+- When the task is done, briefly tell the user which files you produced, using relative paths under artifacts/ (e.g. report.md, scripts/build.sh).
 
 ## Others
-- You are running in a container environment.
-- Internet access is available.
-- Always respond in the language the user used.
-
-## Information
 - Current time: {{TIME}}
-- OS: {{OS}}"#;
+- Always respond in the language the user used."#;
 
 /// name: Identity of the model
 /// model: Model to be used (e.g. openai/gpt-4.5)
@@ -82,10 +84,6 @@ pub async fn get_coworker_agent(
         .replace("{{HOME}}", "/workspace")
         .replace("{{OS}}", "Debian GNU/Linux 13 (trixie)");
 
-    // Note: bypassing AgentBuilder because it does not expose max_tokens.
-    // ailoy's Anthropic adapter defaults to 8192, which truncates large
-    // tool-call arguments (e.g. python-pptx scripts). Bump to 32000 so Claude
-    // Opus can finish writing big `content` payloads in a single turn.
     let spec = AgentSpec::new(model.as_ref())
         .instruction(inst)
         .system_tools()

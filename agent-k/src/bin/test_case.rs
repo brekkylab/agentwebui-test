@@ -4,15 +4,18 @@
 //! cargo run -p agent-k --bin test_case -- 0
 //! cargo run -p agent-k --bin test_case -- 0 --model claude
 //! cargo run -p agent-k --bin test_case -- 0 --model gemini
+//! cargo run -p agent-k --bin test_case -- 0 --model kimi
 
 use std::io::{self, BufRead, IsTerminal, Write};
 
 use agent_k::agents::get_coworker_agent;
 use ailoy::{
     agent::Agent,
+    lang_model::LangModelAPISchema,
     message::{Message, Part, Role},
 };
 use futures::StreamExt;
+use url::Url;
 
 #[path = "test_case/cases.rs"]
 mod cases;
@@ -22,6 +25,7 @@ const COWORKER_AGENT_NAME: &str = "minerva";
 const COWORKER_AGENT_OPENAI_MODEL: &str = "openai/gpt-5.5";
 const COWORKER_AGENT_CLAUDE_MODEL: &str = "anthropic/claude-opus-4-7";
 const COWORKER_AGENT_GEMINI_MODEL: &str = "gemini/gemini-3.5-flash";
+const COWORKER_AGENT_KIMI_MODEL: &str = "moonshot/kimi-k2.6";
 const ARTIFACT_DIR: &str = "./artifacts";
 
 enum InputSource {
@@ -33,6 +37,16 @@ enum InputSource {
 async fn main() -> anyhow::Result<()> {
     dotenvy::dotenv().ok();
 
+    if let Ok(key) = std::env::var("KIMI_API_KEY") {
+        let mut provider = ailoy::agent::default_provider_mut();
+        provider.models.insert_api(
+            "moonshot/kimi-*".into(),
+            LangModelAPISchema::ChatCompletion,
+            Url::parse("https://api.moonshot.ai/v1/chat/completions")?,
+            Some(key),
+        );
+    }
+
     let argv: Vec<String> = std::env::args().skip(1).collect();
     let mut case_no_arg: Option<&str> = None;
     let mut model_arg: Option<&str> = None;
@@ -42,7 +56,7 @@ async fn main() -> anyhow::Result<()> {
         match a {
             "--model" | "-m" => {
                 let v = argv.get(i + 1).ok_or_else(|| {
-                    anyhow::anyhow!("--model requires a value (openai|claude|gemini)")
+                    anyhow::anyhow!("--model requires a value (openai|claude|gemini|kimi)")
                 })?;
                 model_arg = Some(v.as_str());
                 i += 2;
@@ -69,17 +83,18 @@ async fn main() -> anyhow::Result<()> {
             )
         })?,
         None => {
-            eprintln!("usage: test_case <case_no> [--model openai|claude|gemini]");
+            eprintln!("usage: test_case <case_no> [--model openai|claude|gemini|kimi]");
             std::process::exit(2);
         }
     };
 
     let coworker_agent_model = match model_arg {
         None | Some("openai") => COWORKER_AGENT_OPENAI_MODEL,
-        Some("claude") | Some("anthropic") => COWORKER_AGENT_CLAUDE_MODEL,
-        Some("gemini") | Some("google") => COWORKER_AGENT_GEMINI_MODEL,
+        Some("claude") => COWORKER_AGENT_CLAUDE_MODEL,
+        Some("gemini") => COWORKER_AGENT_GEMINI_MODEL,
+        Some("kimi") => COWORKER_AGENT_KIMI_MODEL,
         Some(other) => anyhow::bail!(
-            "invalid --model '{}', expected 'openai', 'claude', or 'gemini'",
+            "invalid --model '{}', expected 'openai', 'claude', 'gemini', or 'kimi'",
             other
         ),
     };

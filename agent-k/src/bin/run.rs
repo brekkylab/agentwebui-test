@@ -4,8 +4,7 @@
 //! `session`, there is no router — every turn is dispatched to the same
 //! coworker agent running against a local `RunEnv`.
 //!
-//! echo "안녕" | cargo run -p agent-k --bin run
-//! cargo run -p agent-k --bin run -- "현재 디렉토리를 정리해줘"
+//! cargo run -p agent-k --bin run -- "Hello"
 
 use std::io::{self, BufRead, IsTerminal, Read, Write};
 
@@ -17,7 +16,9 @@ use ailoy::{
 use futures::StreamExt;
 
 const COWORKER_AGENT_NAME: &str = "minerva";
-const COWORKER_AGENT_MODEL: &str = "openai/gpt-5.4";
+const COWORKER_AGENT_OPENAI_MODEL: &str = "openai/gpt-5.4";
+const COWORKER_AGENT_CLAUDE_MODEL: &str = "anthropic/claude-opus-4-7";
+const COWORKER_AGENT_GEMINI_MODEL: &str = "gemini/gemini-3.5-flash";
 const ARTIFACT_DIR: &str = "./artifacts";
 
 enum InputSource {
@@ -32,10 +33,44 @@ async fn main() -> anyhow::Result<()> {
     clean_artifact_dir();
 
     let argv: Vec<String> = std::env::args().skip(1).collect();
+    let mut model_arg: Option<String> = None;
+    let mut prompt_args: Vec<String> = Vec::new();
+    let mut i = 0;
+    while i < argv.len() {
+        let a = argv[i].as_str();
+        match a {
+            "--model" | "-m" => {
+                let v = argv.get(i + 1).ok_or_else(|| {
+                    anyhow::anyhow!("--model requires a value (openai|claude|gemini)")
+                })?;
+                model_arg = Some(v.clone());
+                i += 2;
+            }
+            s if s.starts_with("--model=") => {
+                model_arg = Some(s["--model=".len()..].to_string());
+                i += 1;
+            }
+            _ => {
+                prompt_args.push(argv[i].clone());
+                i += 1;
+            }
+        }
+    }
+
+    let coworker_agent_model = match model_arg.as_deref() {
+        None | Some("openai") => COWORKER_AGENT_OPENAI_MODEL,
+        Some("claude") | Some("anthropic") => COWORKER_AGENT_CLAUDE_MODEL,
+        Some("gemini") | Some("google") => COWORKER_AGENT_GEMINI_MODEL,
+        Some(other) => anyhow::bail!(
+            "invalid --model '{}', expected 'openai', 'claude', or 'gemini'",
+            other
+        ),
+    };
+
     let stdin_is_tty = io::stdin().is_terminal();
 
-    let first_input = if !argv.is_empty() {
-        let s = argv.join(" ").trim().to_string();
+    let first_input = if !prompt_args.is_empty() {
+        let s = prompt_args.join(" ").trim().to_string();
         (!s.is_empty()).then_some(s)
     } else if !stdin_is_tty {
         let mut buf = String::new();
@@ -52,10 +87,10 @@ async fn main() -> anyhow::Result<()> {
     };
 
     let mut agent =
-        get_coworker_agent(COWORKER_AGENT_NAME, COWORKER_AGENT_MODEL, ARTIFACT_DIR).await?;
+        get_coworker_agent(COWORKER_AGENT_NAME, coworker_agent_model, ARTIFACT_DIR).await?;
     println!(
         "[coworker] starting as '{}' ({})",
-        COWORKER_AGENT_NAME, COWORKER_AGENT_MODEL
+        COWORKER_AGENT_NAME, coworker_agent_model
     );
 
     if let Some(input) = first_input {
